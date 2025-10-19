@@ -1,111 +1,1996 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>リバーシ定石トレーナー（PWA）</title>
-  <link rel="manifest" href="manifest.webmanifest">
-  <meta name="theme-color" content="#222222">
-  <link rel="stylesheet" href="style.css">
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>オセロ暗記トレーナー v7（大/小フォルダ・コメント・検索・自打ち両側・持色UI修正）</title>
+<style>
+  :root { --cell: 56px; --gap: 2px; --left-col: 360px; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "YuGothic", Meiryo, sans-serif; margin: 20px; }
+  h1 { font-size: 1.2rem; margin: 0 0 10px; }
+  .topbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .stat { font-size: .9rem; color: #333; background: #f5f7ff; border: 1px solid #e1e6ff; border-radius: 999px; padding: 4px 10px; }
+
+  .grid { display: grid; grid-template-columns: minmax(300px, var(--left-col)) 1fr; gap: 14px; align-items: start; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel { display: grid; gap: 12px; }
+  .card { border: 1px solid #e7e7e7; border-radius: 10px; padding: 10px; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+  .card h2 { margin: 0 0 6px; font-size: 0.96rem; }
+  .field { display: grid; gap: 6px; margin-bottom: 8px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row.wrap { flex-wrap: wrap; }
+  label { font-size: 0.95rem; }
+  input[type="text"], input[type="number"], textarea, select { width: 100%; font-size: 0.92rem; padding: 6px 8px; border: 1px solid #d6d6d6; border-radius: 6px; }
+  input[type="number"] { width: 120px; }
+  textarea { min-height: 52px; resize: vertical; }
+  button { font-size: 0.90rem; padding: 5px 9px; border: 1px solid #d0d0d0; background: #f7f7f7; border-radius: 8px; cursor: pointer; }
+  button.primary { background: #0f62fe; border-color: #0f62fe; color: #fff; }
+  button.warn { background: #ffeded; border-color: #ffb3b3; color: #a80000; }
+
+  .muted { color: #666; font-size: 0.9rem; }
+  .small { font-size: 0.82rem; color: #666; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Roboto Mono", monospace; }
+
+  /* Board & axes */
+  .board-wrap {
+    position: relative;
+    display: grid; grid-template-columns: var(--axis, auto) repeat(8, var(--cell)) var(--axis, auto);
+    grid-template-rows: var(--axis, auto) repeat(8, var(--cell)) var(--axis, auto); gap: var(--gap);
+    background: #0a5a2a; padding: 6px 0; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.15); user-select: none;
+    overflow: hidden;
+    margin-left:auto; margin-right:auto; /* center */
+  }
+  .axis { display: grid; place-items: center; font-size: 0.80rem; color: #f0f0f0; opacity: 0.95; }
+  .axis.top, .axis.bottom { grid-column: 2 / span 8; grid-template-columns: repeat(8, var(--cell)); gap: var(--gap); }
+  .axis.left, .axis.right { grid-row: 2 / span 8; grid-template-rows: repeat(8, var(--cell)); gap: var(--gap); }
+  .axis.left { grid-column: 1; }
+  .axis.right { grid-column: 10; }
+  .axis.top { grid-row: 1; }
+  .axis.bottom { grid-row: 10; }
+
+  .board { grid-column: 2 / span 8; grid-row: 2 / span 8;
+           display: grid; grid-template-columns: repeat(8, var(--cell)); grid-template-rows: repeat(8, var(--cell)); gap: var(--gap); }
+  .cell { background: #1e7a3b; border-radius: 6px; position: relative; cursor: pointer; }
+  .cell:hover { outline: 2px solid rgba(255,255,255,0.25); }
+  .disc { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+          width: 82%; height: 82%; border-radius: 50%; box-shadow: inset 0 2px 6px rgba(0,0,0,0.35), 0 2px 2px rgba(0,0,0,0.25); }
+  .disc.black { background: #111; } .disc.white { background: #eee; }
+
+  .hint-on .cell.expected::after {
+    content: ""; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: 18px; height: 18px; border-radius: 50%; background: rgba(255,255,255,0.7);
+  }
+  .showCoords .cell::before {
+    content: attr(data-coord);
+    position: absolute; top: 5px; left: 6px; font-size: 11px; line-height: 1;
+    color: rgba(255,255,255,0.85); text-shadow: 0 1px 2px rgba(0,0,0,0.5); pointer-events: none;
+  }
+  .xmark::after {
+    content: "✕"; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    font-size: 32px; color: #ff2d2d; text-shadow: 0 1px 2px rgba(0,0,0,0.5); animation: fadeOut 600ms ease-out forwards; pointer-events: none;
+  }
+  @keyframes fadeOut { 0%{opacity:1} 100%{opacity:0} }
+
+  .status { font-size: 0.97rem; padding: 8px 10px; background: #f7f7f7; border: 1px solid #e8e8e8; border-radius: 8px; }
+  .row-just { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+
+  /* Pause / Inspect overlay */
+  .inspect-bar {
+    position: absolute; left: 10px; top: 10px; z-index: 5;
+    background: rgba(0,0,0,0.55); color: #fff; padding: 4px 8px; border-radius: 8px; font-size: 0.9rem; display: none;
+  }
+  .inspect-action {
+    position: absolute; right: 10px; top: 10px; z-index: 5; display: none;
+  }
+  .inspect-action button { background: #0f62fe; color: #fff; border-color: #0f62fe; }
+
+  /* Celebration overlay */
+  .celebrate {
+    position: absolute; inset: 0; background: rgba(0,0,0,0.45);
+    display: none; align-items: center; justify-content: center; z-index: 8;
+  }
+  .celebrate .content {
+    position: relative; background: rgba(255,255,255,0.95); border-radius: 16px; padding: 24px;
+    text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+  }
+  .celebrate .title { font-size: 1.4rem; font-weight: 700; margin-bottom: 12px; }
+  .celebrate .actions { display: flex; gap: 10px; justify-content: center; margin-top: 10px; }
+  .confetti { position: absolute; width: 6px; height: 12px; background: hsl(var(--h), 90%, 55%); top: -20px; left: var(--x); opacity: .9; animation: fall 1200ms linear forwards; transform: rotate(var(--r)); }
+  @keyframes fall { to { transform: translateY(380px) rotate(calc(var(--r) + 360deg)); opacity: 1; } }
+
+  /* Modal for kifu list */
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: none; align-items: center; justify-content: center; z-index: 20; }
+  .modal .window { width: min(1060px, 94vw); max-height: 88vh; background: #fff; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.25); display: grid; grid-template-rows: auto 1fr auto; }
+  .modal header { padding: 10px 14px; border-bottom: 1px solid #eee; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .modal header h3 { margin: 0; font-size: 1.02rem; }
+  .modal .body { padding: 10px 14px; overflow: auto; }
+  .modal .footer { padding: 10px 14px; border-top: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+
+  .klist-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .klist-row { display: grid; grid-template-columns: auto 1fr auto auto auto; gap: 10px; align-items: start; padding: 8px 0; border-bottom: 1px dashed #eee; }
+  .kindex { width: 2.5em; text-align: right; color: #444; padding-top: 4px; }
+  .kmeta { color: #444; font-size: 0.85rem; }
+  .tag { display: inline-block; padding: 2px 6px; border-radius: 999px; border: 1px solid #ccc; margin-left: 6px; }
+
+  /* Toast */
+  .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; background: rgba(0,0,0,0.8); color: #fff; padding: 8px 12px; border-radius: 8px; font-size: 0.9rem; display: none; z-index: 99; }
+
+  /* --- UI polish for KIFU list --- */
+  .klist-row { display: grid; grid-template-columns: 28px 1fr auto auto auto; gap: 10px; align-items: start; padding: 8px 0; border-bottom: 1px dashed #e9e9e9; }
+  .kindex { opacity: .6; padding-top: 6px; }
+  .kinfo { display: grid; gap: 6px; }
+  .kifu-wrap { display: grid; grid-template-columns: 48px 1fr auto; gap: 8px; align-items: center; }
+  .kifu-wrap .label { font-size: .86rem; color: #555; text-align: right; }
+  .kifu-text { width: 100%; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; padding: 6px 8px; border-radius: 8px; border: 1px solid #e1e1e1; background: #fafafa; }
+  .kifu-text:focus { outline: 2px solid #bcd3ff; background: #fff; }
+  .kifu-btns { display: flex; gap: 8px; align-items: center; }
+  .switch { display: inline-flex; gap: 6px; align-items: center; user-select: none; }
+  .small.muted { color: #666; font-size: .85rem; }
+  button.ghost { background: #f4f4f4; border: 1px solid #ddd; }
+  button.danger.ghost { color: #b00020; border-color: #f0d0d0; background: #fff5f5; }
+
+  /* --- Notes UI additions (v6.1) --- */
+  .note-text { background: #fffdfa; }
+  .kifu-wrap .label { opacity: .85; }
+  .klist-row .kifu-wrap + .kifu-wrap { margin-top: 6px; }
+
+  /* --- Legal-move click gating & in-board problem number (v6.2+) --- */
+  .legal-only .cell { pointer-events: none; cursor: default; }
+  .legal-only .cell.legal { pointer-events: auto; cursor: pointer; }
+  .cell.legal:hover { outline: 2px solid rgba(255,255,255,0.35); }
+
+  /* 盤面ラベル（問題番号）を左下＆クリック非干渉 */
+  .corner-label {
+    position: absolute;
+    left: 10px; bottom: 10px;
+    z-index: 6;
+    background: rgba(0,0,0,0.55);
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    font-size: .95rem;
+    display: none;
+    pointer-events: none;
+  }
+
+  .result-box { text-align: left; margin: 10px 0 8px; }
+  .result-box .field { margin: 6px 0; }
+
+  /* 新規大フォルダ行のUI幅調整 */
+  .row.wrap #newBigFolderColor { width: auto; flex: 0 0 auto; }
+  .row.wrap #addBigFolderBtn  { width: auto; flex: 0 0 auto; }
+  .row.wrap #newBigFolderName { flex: 1 1 240px; min-width: 180px; }
+
+  /* v7.1 additions: axis width & compact reorder buttons */
+  :root { --axis: 22px; }
+  .board-wrap { grid-template-columns: var(--axis) repeat(8, var(--cell)) var(--axis); }
+  .axis { font-size: 0.78rem; }
+  button.tiny { padding: 2px 6px; font-size: 0.84rem; }
+
+  /* v7.2 Drag&Drop reorder + board centering */
+  .reorder-list { display:flex; gap:8px; flex-wrap:wrap; align-items:center; padding:6px; border:1px dashed #ddd; border-radius:8px; background:#fafafa; }
+  .reorder-item { padding:3px 10px; border:1px solid #ddd; border-radius:999px; background:#fff; cursor:grab; user-select:none; }
+  .reorder-item.dragging { opacity:.6; }
+  .reorder-item.drop-before { box-shadow: inset 3px 0 0 #8ab4ff; outline:2px dashed #8ab4ff; outline-offset:-4px; }
+  .reorder-item.drop-after  { box-shadow: inset -3px 0 0 #8ab4ff; outline:2px dashed #8ab4ff; outline-offset:-4px; }
+  .board-wrap { margin-left:auto; margin-right:auto; }
+
+  /* v7.3: Dock ② and ③ to the right of the board */
+  .panel.rightDock { display: grid; grid-template-columns: 1fr minmax(340px, 520px); gap: 14px; align-items: start; }
+  .rightDock .dockGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+  @media (max-width: 1400px){
+    .panel.rightDock { grid-template-columns: 1fr; }
+    .rightDock .dockGrid { grid-template-columns: 1fr; }
+  }
+</style>
 </head>
 <body>
-  <header class="app-header">
-    <h1>リバーシ定石トレーナー</h1>
-    <button id="installBtn" hidden>ホーム画面に追加</button>
-  </header>
+<div class="topbar">
+  <h1>オセロ暗記トレーナー v7</h1>
+  <span class="stat">覚えた棋譜（ユニーク）：<b id="uniqueSolved">0</b></span>
+</div>
 
-  <main class="layout">
-    <aside class="sidebar">
-      <div class="loader">
-        <details open>
-          <summary>データの読み込み</summary>
-          <div class="load-controls">
-            <button id="loadBundledBtn">内蔵データを読み込む</button>
-            <div class="or">または</div>
-            <label class="file-btn">
-              JSONファイルを選ぶ
-              <input id="fileInput" type="file" accept="application/json">
-            </label>
-            <p class="hint">
-              ※最初は「内蔵データ」を読み込むのが簡単です。データを差し替える場合は、JSONを選択してください。
-            </p>
+<div class="grid">
+  <div class="panel">
+    <div class="card">
+      <h2>① 大/小フォルダと棋譜入出力</h2>
+
+      <div class="field">
+        <div class="row wrap">
+          <label>大フォルダ：</label>
+          <select id="bigFolderSelect"></select>
+          <button class="warn" id="deleteBigFolderBtn">大フォルダ削除</button>
+        </div>
+
+        <div class="row wrap">
+          <input id="newBigFolderName" placeholder="新規大フォルダ名（例：虎大量）" type="text"/>
+          <div aria-label="持色（任意）" class="row" id="newBigFolderColorGroup" role="group" style="gap:10px;">
+            <label class="small"><input checked name="newBigColor" type="radio" value=""/> 指定なし</label>
+            <label class="small"><input name="newBigColor" type="radio" value="BLACK"/> 黒</label>
+            <label class="small"><input name="newBigColor" type="radio" value="WHITE"/> 白</label>
           </div>
-        </details>
-      </div>
-
-      <div class="filters">
-        <input id="searchBox" type="search" placeholder="名前・コメントで検索…" />
-      </div>
-
-      <nav class="tree">
-        <h3>フォルダ</h3>
-        <ul id="bigList"></ul>
-      </nav>
-      <nav class="tree">
-        <h3>サブフォルダ</h3>
-        <ul id="smallList"></ul>
-      </nav>
-      <nav class="tree">
-        <h3>棋譜（定石）</h3>
-        <ul id="kifuList"></ul>
-      </nav>
-    </aside>
-
-    <section class="content">
-      <div class="board-panel">
-        <div class="board-wrap">
-          <div id="board" class="board" aria-label="リバーシ盤 8x8"></div>
+          <button id="addBigFolderBtn">作成</button>
         </div>
-        <div class="controls">
-          <button id="firstBtn" title="最初">&laquo;</button>
-          <button id="prevBtn" title="戻る">&lsaquo;</button>
-          <span id="moveInfo">0 / 0</span>
-          <button id="nextBtn" title="進む">&rsaquo;</button>
-          <button id="lastBtn" title="最後">&raquo;</button>
-          <button id="autoBtn" title="自動再生">自動</button>
+
+        <div class="row wrap">
+          <button class="ghost tiny" id="toggleBigReorderBtn">大フォルダを並べ替える</button>
+        </div>
+        <div class="row wrap">
+          <div aria-label="大フォルダの順序（ドラッグで並び替え）" class="reorder-list" id="bigReorderList" style="display:none;"></div>
         </div>
       </div>
 
-      <article class="meta">
-        <h2 id="kifuTitle">定石を選んでください</h2>
-        <div id="kifuMeta"></div>
-        <details>
-          <summary>現在の手順</summary>
-          <ol id="moveList"></ol>
-        </details>
-      </article>
-    </section>
-  </main>
+      <div class="field">
+        <div class="row wrap">
+          <label>小フォルダ：</label>
+          <select id="smallFolderSelect"></select>
+          <button class="warn" id="deleteSmallFolderBtn">小フォルダ削除</button>
+        </div>
+        <div class="row wrap">
+          <input id="newSmallFolderName" placeholder="新規小フォルダ名（例：FJT）" type="text"/>
+          <button id="addSmallFolderBtn">作成</button>
+        </div>
+        <div class="row wrap">
+          <button class="ghost tiny" id="toggleSmallReorderBtn">小フォルダを並べ替える</button>
+        </div>
+        <div class="row wrap">
+          <div aria-label="小フォルダの順序（ドラッグで並び替え）" class="reorder-list" id="smallReorderList" style="display:none;"></div>
+        </div>
+      </div>
 
-  <footer class="app-footer">
-    <small>オフライン対応（PWA）。このアプリはあなたのJSONデータをローカルで読み込みます。</small>
-  </footer>
+      <div class="field">
+        <label>棋譜入力（1行=1棋譜／複数行ペーストOK）</label>
+        <textarea class="mono" id="kifuInput" placeholder="例：
+f5d6c3d3c4f4c5b3...（区切りなし・大/小文字どちらでも可）
+または F5 D6 C3 ... / F5,D6,C3 ...（空白/カンマ区切り）
+PASSは P または PASS。"></textarea>
+        <div class="row wrap">
+          <button id="addKifuBtn">棋譜を追加</button>
+          <button class="ghost" id="clearKifuInputBtn">入力クリア</button>
+        </div>
+        <div class="small">※ 追加時に重複棋譜は自動スキップ（暗黙パスも考慮して判定）。</div>
+      </div>
 
-  <script defer src="app.js"></script>
-  <script>
-    // PWA install prompt
-    let deferredPrompt;
-    const installBtn = document.getElementById('installBtn');
-    window.addEventListener('beforeinstallprompt', (e) => {
-      e.preventDefault();
-      deferredPrompt = e;
-      installBtn.hidden = false;
-    });
-    installBtn?.addEventListener('click', async () => {
-      installBtn.hidden = true;
-      if (deferredPrompt) {
-        deferredPrompt.prompt();
-        await deferredPrompt.userChoice;
-        deferredPrompt = null;
+      <div class="field row wrap">
+        <button class="ghost" id="openListBtn">棋譜一覧を開く</button>
+      </div>
+
+      <div class="field row wrap">
+        <button class="ghost" id="exportBtn">エクスポート（JSON）</button>
+        <input accept="application/json" id="importFile" style="display:none;" type="file"/>
+        <button class="ghost" id="importBtn">インポート</button>
+        <button class="warn" id="initAllBtn">初期化（全データ消去）</button>
+      </div>
+      <div class="small muted">※ 初期化はローカルに保存された全データ（大/小フォルダ・棋譜・キュー・統計）を削除し、インポート前の初期状態に戻します。</div>
+      <div class="small muted">Excel（XLSX/XLSM）からの取り込みは、事前に同梱の「Excel→JSON 変換ツール」で JSON にしてから本ボタンで取り込むのが確実です。</div>
+    </div>
+  </div>
+
+  <div class="panel rightDock">
+    <div class="card">
+      <div class="board-wrap" id="boardWrap">
+        <div class="inspect-bar" id="inspectBar">確認中</div>
+        <div class="inspect-action" id="inspectAction"><button id="resumeBtn">暗記再開</button></div>
+        <div aria-label="問題番号" class="corner-label" id="boardIndexLabel"></div>
+        <div class="celebrate" id="celebrate">
+          <div class="content">
+            <div class="title">暗記成功！</div>
+            <div class="small muted" id="celebrateMsg"></div>
+            <div class="result-box" id="resultInfo">
+              <div class="small muted">問題番号：<span id="resultIndex">—</span></div>
+              <div class="field">
+                <label class="small">棋譜</label>
+                <textarea class="kifu-text" id="resultKifuText" readonly rows="2"></textarea>
+                <div class="row">
+                  <button class="ghost" id="resultCopyBtn">コピー</button>
+                  <span class="small muted" id="resultLen"></span>
+                </div>
+              </div>
+              <div class="field">
+                <label class="small">コメント</label>
+                <textarea class="kifu-text note-text" id="resultCommentInput" placeholder="メモや気づき、対策などを自由に" rows="3"></textarea>
+              </div>
+            </div>
+            <div class="actions">
+              <button class="primary" id="repeatBtn">今の棋譜をもう一度トレーニング</button>
+              <button id="nextBtn">次の問題に進む</button>
+            </div>
+          </div>
+        </div>
+        <div class="axis top" id="topAxis"></div>
+        <div class="axis left" id="leftAxis"></div>
+        <div aria-label="オセロ盤（A-H/1-8）" class="board" id="board"></div>
+        <div class="axis right" id="rightAxis"></div>
+        <div class="axis bottom" id="bottomAxis"></div>
+      </div>
+      <div class="row-just">
+        <div class="small">座標：左→右 A–H、上→下 1–8（左上=A1）</div>
+      </div>
+    </div>
+
+    <div class="dockGrid">
+      <div class="card">
+        <h2>② トレーニング設定</h2>
+        <div class="field row">
+          <label>自分の色：</label>
+          <label><input checked name="myColor" type="radio" value="BLACK"/> 黒（先手）</label>
+          <label><input name="myColor" type="radio" value="WHITE"/> 白（後手）</label>
+        </div>
+        <div class="field row wrap">
+          <label>出題モード：</label>
+          <select id="pickMode">
+            <option selected value="RANDOM">ランダム（出題オンのみ）</option>
+            <option value="NUMBER">番号指定（表示順）</option>
+            <option value="NUMBER_ENABLED">番号指定（出題オンに限定）</option>
+            <option value="QUEUE">キュー順（この小フォルダ）</option>
+            <option value="HARD">誤答が多い順（出題オンのみ）</option>
+            <option value="UNSOLVED">未クリアのみ（出題オンのみ）</option>
+          </select>
+          <input id="kifuNumberInput" min="1" placeholder="番号（1〜）" title="番号指定時のみ使用" type="number"/>
+        </div>
+        <div class="field row wrap">
+          <label for="startIndexInput">Start index（開始手）：</label>
+          <input id="startIndexInput" max="60" min="1" placeholder="例：30" type="number"/>
+          <label for="endIndexInput">End index（終了手）：</label>
+          <input id="endIndexInput" max="60" min="1" placeholder="例：60" type="number"/>
+        </div>
+        <div class="field row wrap">
+          <label><input id="toggleHint" type="checkbox"/> 期待手をハイライト</label>
+          <label><input id="toggleMiniCoord" type="checkbox"/> マス内に座標表示</label>
+          <label><input checked id="toggleSound" type="checkbox"/> 効果音</label>
+        </div>
+        <div class="field row wrap">
+          <label><input id="toggleSelfBoth" type="checkbox"/> 両方を自分で打つ（AIは打たない）</label>
+          <span class="small muted">※オンの間は「自分の色」は無視されます。</span>
+        </div>
+        <div class="row wrap">
+          <button class="primary" id="startBtn">トレーニング開始</button>
+          <button id="resetBtn">盤面リセット</button>
+        </div>
+        <div class="status" id="status">大/小フォルダを選び、棋譜を登録して開始してください。</div>
+        <div class="small">
+          範囲進行：<span id="progress">0 / 0</span> 手 |
+          現在：<span id="pathView">—</span> |
+          出題オン：<span id="enabledCount">0</span>件 |
+          キュー：<span id="queueCount">0</span>件 |
+          誤答：<span id="mistakesNow">0</span>回
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>③ キュー &amp; クリアリスト</h2>
+        <div class="field">
+          <div class="row wrap">
+            <button class="ghost" id="clearQueueBtn">キューをクリア（この小フォルダ）</button>
+            <button class="ghost" id="peekQueueBtn">キュー先頭を確認</button>
+          </div>
+          <div class="small" id="queueView" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+        </div>
+        <div class="field">
+          <div><b>クリアリスト（この小フォルダ）</b></div>
+          <div class="small" id="solvedList"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal (棋譜一覧 兼 編集・検索) -->
+<div class="modal" id="kifuModal">
+  <div class="window">
+    <header>
+      <h3>棋譜一覧（<span id="modalPathName">—</span>）</h3>
+      <div class="klist-controls">
+        <label>並び替え：</label>
+        <select id="sortBy">
+          <option value="INDEX" selected>表示順（追加順）</option>
+          <option value="NAME">名前</option>
+          <option value="LEN">手数</option>
+          <option value="SOLVED">クリア回数</option>
+          <option value="MISTAKES">誤答回数</option>
+        </select>
+        <select id="sortDir">
+          <option value="ASC" selected>昇順</option>
+          <option value="DESC">降順</option>
+        </select>
+        <input id="searchInput" placeholder="棋譜／備考／名前で検索（空白区切りAND）" style="min-width:280px;" type="text"/>
+        <button class="ghost" id="clearSearchBtn">初期設定</button>
+      </div>
+      <button class="ghost" id="closeModalBtn">閉じる</button>
+    </header>
+    <div class="body">
+      <div class="field" id="kifuList"></div>
+    </div>
+    <div class="footer">
+      <div class="small">出題オン：<span id="enabledCountModal">0</span>件</div>
+      <div class="row">
+        <button class="ghost" id="clearStatsBtn">統計をリセット（この小フォルダ）</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// Patched on 2025-10-18: stable '追加順' numbers across sorts (list & board & result panel).
+/* ====== Compact layout: fit board to viewport (no vertical scroll) ====== */
+function fitBoardToViewport(){
+  try{
+    const topbar = document.querySelector('.topbar');
+    const topH = topbar ? topbar.getBoundingClientRect().height : 0;
+    const reserved = 54; // margins, card shadows etc.
+    const vh = window.innerHeight;
+    const cell = Math.max(34, Math.min(56, Math.floor((vh - topH - reserved) / 10)));
+    document.documentElement.style.setProperty('--cell', cell + 'px');
+  }catch(e){ /* ignore */ }
+}
+window.addEventListener('resize', fitBoardToViewport);
+document.addEventListener('DOMContentLoaded', fitBoardToViewport);
+
+/* ====== ルール基盤 ====== */
+const EMPTY=0, BLACK=1, WHITE=-1;
+const DIRS=[[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+const COLS="ABCDEFGH".split("");
+const ROWS=[1,2,3,4,5,6,7,8];
+function inBounds(r,c){ return r>=0 && r<8 && c>=0 && c<8; }
+function toCoord(r,c){ return COLS[c] + (r+1); }
+function coordToRC(coord){
+  const m = String(coord).trim().toUpperCase().match(/^([A-H])\s*([1-8])$/);
+  if(!m) return null;
+  const c = COLS.indexOf(m[1]);
+  const r = parseInt(m[2],10)-1;
+  return [r,c];
+}
+function newBoard(){
+  const b = Array.from({length:8},()=>Array(8).fill(EMPTY));
+  b[3][3]=WHITE; b[4][4]=WHITE; b[3][4]=BLACK; b[4][3]=BLACK;
+  return b;
+}
+function findFlips(b, r, c, player) {
+  if (b[r][c] !== EMPTY) return [];
+  const flips = [];
+  for (const [dr, dc] of DIRS) {
+    let i = r + dr, j = c + dc, tmp = [];
+    while (inBounds(i,j) && b[i][j] === -player) { tmp.push([i,j]); i += dr; j += dc; }
+    if (tmp.length && inBounds(i,j) && b[i][j] === player) flips.push(...tmp);
+  }
+  return flips;
+}
+function legalMoves(b, player) {
+  const moves=[];
+  for(let r=0;r<8;r++) for(let c=0;c<8;c++){
+    const flips = findFlips(b,r,c,player);
+    if(flips.length) moves.push({ r, c, flips });
+  }
+  return moves;
+}
+function applyMove(b, move, player){
+  b[move.r][move.c]=player;
+  for(const [r,c] of move.flips) b[r][c]=player;
+}
+
+/* ====== ストア v6 ====== */
+const FILE_BASENAME = (location && location.pathname ? location.pathname.split('/').pop() : 'index.html');
+const STORE_PREFIX = "reversi_trainer_" + FILE_BASENAME + "_";
+const STORE_KEY_V6 = STORE_PREFIX + "store_v6";
+const LEGACY_KEYS = [STORE_PREFIX + "store_v5", STORE_PREFIX + "store_v4", STORE_PREFIX + "store_v3", STORE_PREFIX + "store_v2", STORE_PREFIX + "store_v1"];
+function pathKey(big, small){ return big + "/" + (small || "__ROOT__"); }
+function defaultStore(){
+  return {
+    version:6,
+    bigFolders:[],
+    smallByBig:{},
+    kifuByPath:{},
+    queueByPath:{},
+    learnedOnceIds: []
+  };
+}
+function loadStore(){
+  const raw = localStorage.getItem(STORE_KEY_V6);
+  if(raw){ try{ return JSON.parse(raw); }catch(e){ console.warn(e); } }
+  for(const key of LEGACY_KEYS){
+    const rk = localStorage.getItem(key);
+    if(!rk) continue;
+    try{
+      const old = JSON.parse(rk);
+      let store = defaultStore();
+      store.bigFolders=[]; store.smallByBig={}; store.kifuByPath={}; store.queueByPath={}; store.learnedOnceIds = old.learnedOnceIds || [];
+      if(old.folders && old.kifuByFolder){
+        for(const f of old.folders){
+          store.bigFolders.push({ name: f, defaultColor: "" });
+          store.smallByBig[f] = [];
+          const p = pathKey(f, null);
+          store.kifuByPath[p] = (old.kifuByFolder[f]||[]).map(k=>({ ...k, sig: k.sig || canonicalSignature(k.moves||[]) }));
+          store.queueByPath[p] = (old.queueByFolder?.[f]||[]);
+        }
+      }else if(old.bigFolders && old.kifuByPath){
+        store = old; store.version=6;
       }
-    });
+      saveStore(store); alert("旧データをv6形式に移行しました。"); return store;
+    }catch(e){ console.warn("migration failed", e); }
+  }
+  const d = defaultStore(); saveStore(d); return d;
+}
+function saveStore(obj){ localStorage.setItem(STORE_KEY_V6, JSON.stringify(obj)); }
+let store = loadStore();
 
-    // Register service worker
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./service-worker.js').catch(console.warn);
+/* ====== UI参照 ====== */
+const uniqueSolvedEl = document.getElementById('uniqueSolved');
+
+const boardWrap = document.getElementById('boardWrap');
+const boardEl = document.getElementById('board');
+const topAxis = document.getElementById('topAxis');
+const bottomAxis = document.getElementById('bottomAxis');
+const leftAxis = document.getElementById('leftAxis');
+const rightAxis = document.getElementById('rightAxis');
+
+const bigFolderSelect = document.getElementById('bigFolderSelect');
+const newBigFolderName = document.getElementById('newBigFolderName');
+const newBigFolderColor = document.getElementById('newBigFolderColor');
+const addBigFolderBtn = document.getElementById('addBigFolderBtn');
+const deleteBigFolderBtn = document.getElementById('deleteBigFolderBtn');
+
+const smallFolderSelect = document.getElementById('smallFolderSelect');
+const newSmallFolderName = document.getElementById('newSmallFolderName');
+const addSmallFolderBtn = document.getElementById('addSmallFolderBtn');
+const deleteSmallFolderBtn = document.getElementById('deleteSmallFolderBtn');
+
+const bigReorderList = document.getElementById('bigReorderList');
+const smallReorderList = document.getElementById('smallReorderList');
+
+const bigUpBtn = document.getElementById('bigUpBtn');
+const bigDownBtn = document.getElementById('bigDownBtn');
+const bigTopBtn = document.getElementById('bigTopBtn');
+const bigBottomBtn = document.getElementById('bigBottomBtn');
+const smallUpBtn = document.getElementById('smallUpBtn');
+const smallDownBtn = document.getElementById('smallDownBtn');
+const smallTopBtn = document.getElementById('smallTopBtn');
+const smallBottomBtn = document.getElementById('smallBottomBtn');
+
+const openListBtn = document.getElementById('openListBtn');
+
+const kifuInput = document.getElementById('kifuInput');
+const addKifuBtn = document.getElementById('addKifuBtn');
+const clearKifuInputBtn = document.getElementById('clearKifuInputBtn');
+
+const startBtn = document.getElementById('startBtn');
+const resetBtn = document.getElementById('resetBtn');
+const statusEl = document.getElementById('status');
+const progressEl = document.getElementById('progress');
+const pathViewEl = document.getElementById('pathView');
+const enabledCountEl = document.getElementById('enabledCount');
+const queueCountEl = document.getElementById('queueCount');
+const mistakesNowEl = document.getElementById('mistakesNow');
+const toggleHintEl = document.getElementById('toggleHint');
+const toggleMiniCoordEl = document.getElementById('toggleMiniCoord');
+const toggleSoundEl = document.getElementById('toggleSound');
+
+const pickModeEl = document.getElementById('pickMode');
+const kifuNumberInput = document.getElementById('kifuNumberInput');
+const startIndexInput = document.getElementById('startIndexInput');
+const endIndexInput = document.getElementById('endIndexInput');
+
+const exportBtn = document.getElementById('exportBtn');
+const importBtn = document.getElementById('importBtn');
+const importFile = document.getElementById('importFile');
+const initAllBtn = document.getElementById('initAllBtn');
+
+const clearQueueBtn = document.getElementById('clearQueueBtn');
+const peekQueueBtn = document.getElementById('peekQueueBtn');
+const queueView = document.getElementById('queueView');
+const solvedListEl = document.getElementById('solvedList');
+
+const kifuModal = document.getElementById('kifuModal');
+const modalPathName = document.getElementById('modalPathName');
+const kifuList = document.getElementById('kifuList');
+const closeModalBtn = document.getElementById('closeModalBtn');
+const sortByEl = document.getElementById('sortBy');
+const sortDirEl = document.getElementById('sortDir');
+const searchInput = document.getElementById('searchInput');
+const clearSearchBtn = document.getElementById('clearSearchBtn');
+const enabledCountModalEl = document.getElementById('enabledCountModal');
+
+const inspectBar = document.getElementById('inspectBar');
+const inspectAction = document.getElementById('inspectAction');
+const resumeBtn = document.getElementById('resumeBtn');
+
+const celebrateLayer = document.getElementById('celebrate');
+const celebrateMsg = document.getElementById('celebrateMsg');
+const repeatBtn = document.getElementById('repeatBtn');
+const nextBtn = document.getElementById('nextBtn');
+
+const toastEl = document.getElementById('toast');
+const boardIndexLabel = document.getElementById('boardIndexLabel');
+const resultIndexEl = document.getElementById('resultIndex');
+const resultKifuText = document.getElementById('resultKifuText');
+const resultCopyBtn = document.getElementById('resultCopyBtn');
+const resultCommentInput = document.getElementById('resultCommentInput');
+const resultLenEl = document.getElementById('resultLen');
+
+const toggleSelfBothEl = document.getElementById('toggleSelfBoth');
+const myColorRadios = document.querySelectorAll('input[name="myColor"]');
+
+/* ====== 状態 ====== */
+let board = newBoard(), currentPlayer = BLACK;
+let expectedMoves = [];
+let rangeStart = 1, rangeEnd = 0;
+let moveIndex = 0;
+let myColor = BLACK;
+let training = false;
+let sessionMistakes = 0;
+let currentKifuId = null;
+let inspectMode = false;
+let inspectIndex = 0;
+let selfBothMode = false;
+
+/* ====== 盤描画 ====== */
+function renderAxes(){
+  topAxis.innerHTML=""; bottomAxis.innerHTML="";
+  COLS.forEach(ch => { const d=document.createElement('div'); d.textContent=ch; topAxis.appendChild(d); });
+  COLS.forEach(ch => { const d=document.createElement('div'); d.textContent=ch; bottomAxis.appendChild(d); });
+  leftAxis.innerHTML=""; rightAxis.innerHTML="";
+  ROWS.forEach(n => { const d=document.createElement('div'); d.textContent=n; leftAxis.appendChild(d); });
+  ROWS.forEach(n => { const d=document.createElement('div'); d.textContent=n; rightAxis.appendChild(d); });
+}
+function rcFromIndex(i){ return [Math.floor(i/8), i%8]; }
+function ensureCells(){
+  if(boardEl.children.length) return;
+  for(let i=0;i<64;i++){
+    const cell=document.createElement('div');
+    const [r,c]=rcFromIndex(i);
+    cell.className='cell';
+    cell.dataset.r=r; cell.dataset.c=c;
+    cell.dataset.coord = COLS[c] + (r+1);
+    cell.title = cell.dataset.coord;
+    cell.addEventListener('click', onCellClick);
+    boardEl.appendChild(cell);
+  }
+}
+function renderBoard(){
+  ensureCells();
+  for(let i=0;i<64;i++){ boardEl.children[i].classList.remove('expected'); }
+  if(training && toggleHintEl.checked && expectedMoves.length>0 && moveIndex < expectedMoves.length && moveIndex < rangeEnd){
+    const token = nextTokenSkippingImplicitPasses(moveIndex, board, currentPlayer);
+    if(token && token!=="P" && token!=="PASS"){
+      const rc = coordToRC(token);
+      if(rc){ const idx = rc[0]*8 + rc[1]; boardEl.children[idx].classList.add('expected'); }
+    }
+  }
+  for(let i=0;i<64;i++){
+    const cell=boardEl.children[i];
+    const r=parseInt(cell.dataset.r,10), c=parseInt(cell.dataset.c,10);
+    cell.innerHTML="";
+    const v=board[r][c];
+    if(v!==EMPTY){
+      const d=document.createElement('div'); d.className='disc ' + (v===BLACK?'black':'white'); cell.appendChild(d);
+    }
+  }
+  boardWrap.classList.toggle('showCoords', toggleMiniCoordEl.checked);
+  boardWrap.classList.toggle('hint-on', toggleHintEl.checked);
+  updateLegalClickable();
+  maybeAutoPassPlayer();
+  inspectBar.style.display = inspectMode ? 'inline-block' : 'none';
+  inspectAction.style.display = inspectMode ? 'inline-block' : 'none';
+  updateBoardIndexLabel();
+}
+
+/* --- v6.2+ helpers --- */
+function maybeAutoPassPlayer(){
+  if(!training || inspectMode) return;
+  if(!selfBothMode && currentPlayer !== myColor) return;
+
+  const LM = legalMoves(board, currentPlayer);
+  if(LM.length > 0) return;
+
+  const token = expectedMoves[moveIndex];
+  if(token === "P" || token === "PASS"){
+    currentPlayer = -currentPlayer; 
+    moveIndex++; 
+    setProgress();
+  }else{
+    currentPlayer = -currentPlayer;
+  }
+  setTimeout(()=>{ renderBoard(); stepIfAIShouldPlay(); }, 0);
+}
+
+function updateLegalClickable(){
+  ensureCells();
+  for(let i=0;i<64;i++){ boardEl.children[i].classList.remove('legal'); }
+  if(training && (selfBothMode || currentPlayer === myColor)){
+    const LM = legalMoves(board, currentPlayer);
+    LM.forEach(m => {
+      const idx = m.r*8 + m.c;
+      boardEl.children[idx].classList.add('legal');
+    });
+    boardWrap.classList.add('legal-only');
+  }else{
+    boardWrap.classList.remove('legal-only');
+  }
+}
+function updateBoardIndexLabel(){
+  if(!training || !currentKifuId){ boardIndexLabel.style.display='none'; return; }
+  const pk = currentPath();
+  const baseArr = store.kifuByPath[pk] || [];
+  const k = baseArr.find(x=>x.id===currentKifuId);
+  if(!k){ boardIndexLabel.style.display='none'; return; }
+  if(typeof k._idx !== 'number'){
+    const idx0 = baseArr.findIndex(x=>x.id===k.id);
+    if(idx0 >= 0) k._idx = idx0;
+  }
+  const num = (typeof k._idx === 'number') ? (k._idx + 1) : null;
+  if(num != null){
+    boardIndexLabel.textContent = String(num);
+    boardIndexLabel.style.display = 'inline-block';
+  }else{
+    boardIndexLabel.style.display = 'none';
+  }
+}
+function populateResultPanel(){
+  const pk = currentPath();
+  const baseArr = store.kifuByPath[pk] || [];
+  const k = baseArr.find(x=>x.id===currentKifuId);
+  if(!k) return;
+  resultKifuText.value = (k.moves||[]).join(" ");
+  resultLenEl.textContent = `（${(k.moves||[]).length}手）`;
+
+  if(typeof k._idx !== 'number'){
+    const idx0 = baseArr.findIndex(x=>x.id===k.id);
+    if(idx0 >= 0) k._idx = idx0;
+  }
+  const num = (typeof k._idx === 'number') ? (k._idx + 1) : null;
+  resultIndexEl.textContent = (num != null) ? String(num) : "—";
+
+  resultCommentInput.value = k.comment || "";
+  resultCommentInput.oninput = function(){
+    k.comment = resultCommentInput.value;
+    saveStore(store);
+  };
+  resultCopyBtn.onclick = async function(){
+    try{
+      await navigator.clipboard.writeText(resultKifuText.value);
+      showToast("棋譜をコピーしました");
+    }catch(e){
+      resultKifuText.focus(); resultKifuText.select();
+      const ok = document.execCommand('copy');
+      showToast(ok? "棋譜をコピーしました" : "コピーに失敗しました");
+    }
+  };
+}
+
+/* ====== 効果音 ====== */
+let audioCtx = null;
+function playSound(type){
+  if(!toggleSoundEl.checked) return;
+  try{
+    if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.connect(g); g.connect(audioCtx.destination);
+    let freq=880, dur=0.12;
+    if(type==="ok"){ freq=880; dur=0.12; }
+    else if(type==="ng"){ freq=220; dur=0.25; }
+    else if(type==="success"){ freq=660; dur=0.14; setTimeout(()=>{ const o2=audioCtx.createOscillator(); const g2=audioCtx.createGain(); o2.connect(g2); g2.connect(audioCtx.destination); o2.frequency.value=990; o2.type="sine"; g2.gain.setValueAtTime(0.0001, audioCtx.currentTime); g2.gain.exponentialRampToValueAtTime(0.15, audioCtx.currentTime+0.01); o2.start(); o2.stop(audioCtx.currentTime+0.12); }, 160); }
+    o.frequency.value=freq; o.type="sine";
+    g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.18, audioCtx.currentTime+0.01);
+    o.start(); o.stop(audioCtx.currentTime+dur);
+  }catch(e){ /* ignore */ }
+}
+
+/* ====== トークナイズ ====== */
+function tokenizeKifuString(line){
+  const cleaned = String(line).replace(/[\s,;]+/g, '').toUpperCase();
+  if(cleaned.length===0) return [];
+  const re = /([A-H][1-8]|P(?:ASS)?)/g;
+  const tokens = [];
+  let m, acc="";
+  while((m=re.exec(cleaned))!==null){ tokens.push(m[1]); acc += m[1]; }
+  if(acc !== cleaned){
+    const spaced = String(line).replace(/[;,]+/g,' ').trim().split(/\s+/).filter(Boolean).map(s=>s.toUpperCase());
+    if(spaced.length && spaced.every(x => /^[A-H][1-8]$/.test(x) || /^P(?:ASS)?$/.test(x))){
+      return spaced;
+    }
+    return null;
+  }
+  return tokens;
+}
+function canonicalSignature(moves){
+  return (moves||[]).filter(t=>!(t==="P" || t==="PASS")).map(t=>t.toUpperCase()).join('');
+}
+
+/* ====== 検証（暗黙パス対応） ====== */
+function nextTokenSkippingImplicitPasses(i, b, player){
+  let tempB = b.map(row=>row.slice()), p = player, idx = i;
+  while(true){
+    const LM = legalMoves(tempB, p);
+    if(LM.length===0){
+      const LM2 = legalMoves(tempB, -p);
+      if(LM2.length===0) return null;
+      p = -p; continue;
+    }
+    return expectedMoves[idx] || null;
+  }
+}
+function validateMoves(tokens){
+  let b = newBoard();
+  let player = BLACK;
+  let i = 0;
+  let consecutivePasses = 0;
+  while(i < tokens.length){
+    const token = tokens[i];
+    const LMcur = legalMoves(b, player);
+    if(token==="P" || token==="PASS"){
+      if(LMcur.length>0) return { ok:false, error:`${i+1}手目：PASS指定ですが合法手があります` };
+      player = -player; i++; consecutivePasses++;
+      if(consecutivePasses>=2){
+        return { ok:false, error:`${i}手で終局ですが、余分な手が指定されています` };
+      }
+      continue;
+    }
+    if(LMcur.length===0){
+      player = -player; consecutivePasses++;
+      if(consecutivePasses>=2){ return { ok:false, error:`${i}手で終局ですが、余分な手が指定されています` }; }
+      continue;
+    }
+    consecutivePasses = 0;
+    const rc = coordToRC(token);
+    const match = legalMoves(b, player).find(m=>m.r===rc[0] && m.c===rc[1]);
+    if(!match) return { ok:false, error:`${i+1}手目 ${token} は合法手ではありません` };
+    applyMove(b, match, player);
+    player = -player; i++;
+  }
+  return { ok:true };
+}
+
+/* ====== 現在のパスなど ====== */
+function currentBig(){ return bigFolderSelect.value; }
+function currentSmall(){ return smallFolderSelect.value || null; }
+function currentPath(){ return pathKey(currentBig(), currentSmall()); }
+function ensureBig(big){
+  if(!store.bigFolders.find(b=>b.name===big)){
+    store.bigFolders.push({ name: big, defaultColor: "" });
+  }
+  if(!store.smallByBig[big]) store.smallByBig[big]=[];
+  if(!store.kifuByPath[pathKey(big,null)]) store.kifuByPath[pathKey(big,null)]=[];
+  if(!store.queueByPath[pathKey(big,null)]) store.queueByPath[pathKey(big,null)]=[];
+}
+function ensureSmall(big, sm){
+  ensureBig(big);
+  if(sm && !store.smallByBig[big].includes(sm)){
+    store.smallByBig[big].push(sm);
+  }
+  const pk = pathKey(big, sm||null);
+  if(!store.kifuByPath[pk]) store.kifuByPath[pk]=[];
+  if(!store.queueByPath[pk]) store.queueByPath[pk]=[];
+}
+function getArrayByPath(pk){ return store.kifuByPath[pk] || []; }
+function getQueueByPath(pk){ return store.queueByPath[pk] || []; }
+
+/* ====== Big/Small 選択UI ====== */
+function refreshBigSelect(){
+  bigFolderSelect.innerHTML="";
+  store.bigFolders.forEach(b=>{
+    const opt=document.createElement('option'); opt.value=b.name; opt.textContent=b.name + (b.defaultColor?`（持色:${b.defaultColor==='BLACK'?'黒':b.defaultColor==='WHITE'?'白':'—'}）`:"");
+    bigFolderSelect.appendChild(opt);
+  });
+  refreshSmallSelect();
+  renderReorderUI();
+}
+function refreshSmallSelect(){
+  const big=currentBig();
+  const meta = (store.bigFolders||[]).find(b=>b.name===big);
+  if(meta && meta.defaultColor){
+    const target = meta.defaultColor === 'WHITE' ? 'WHITE' : 'BLACK';
+    const radios = document.querySelectorAll('input[name="myColor"]');
+    radios.forEach(r => { r.checked = (r.value===target); });
+  }
+  const list=store.smallByBig[big]||[];
+  smallFolderSelect.innerHTML="";
+  list.forEach(s=>{ const o=document.createElement('option'); o.value=s; o.textContent=s; smallFolderSelect.appendChild(o); });
+  updateCountsAndPath();
+  renderReorderUI();
+}
+function updateCountsAndPath(){
+  const pk = currentPath();
+  pathViewEl.textContent = pk;
+  updateEnabledCount();
+  updateQueueView();
+  renderSolvedList();
+}
+
+function getNewBigColorValue(){
+  const r = document.querySelector('input[name="newBigColor"]:checked');
+  if (r) return (r.value || "").trim();
+  if (typeof newBigFolderColor !== 'undefined' && newBigFolderColor) {
+    return (newBigFolderColor.value || "").trim();
+  }
+  return "";
+}
+
+/* ====== Big/Small 追加・削除 ====== */
+function addBigFolder(){
+  const name=(newBigFolderName.value||"").trim();
+  const color=getNewBigColorValue();
+  if(!name){ alert("大フォルダ名を入力してください"); return; }
+  if(store.bigFolders.find(b=>b.name===name)){ alert("同名の大フォルダが既にあります"); return; }
+  store.bigFolders.push({ name, defaultColor: color });
+  ensureBig(name); saveStore(store);
+  newBigFolderName.value="";
+  const r0 = document.querySelector('input[name="newBigColor"][value=""]');
+  if (r0) r0.checked = true;
+  if (typeof newBigFolderColor !== 'undefined' && newBigFolderColor) newBigFolderColor.value="";
+  refreshBigSelect();
+}
+function deleteBigFolder(){
+  const big=currentBig(); if(!big) return;
+  if(!confirm(`大フォルダ「${big}」を削除しますか？（中の小フォルダと棋譜も削除）`)) return;
+  const keys = Object.keys(store.kifuByPath);
+  keys.forEach(k=>{ if(k.startsWith(big+"/")){ delete store.kifuByPath[k]; delete store.queueByPath[k]; } });
+  delete store.smallByBig[big];
+  store.bigFolders = store.bigFolders.filter(b=>b.name!==big);
+  saveStore(store); refreshBigSelect();
+}
+function addSmallFolder(){
+  const sm=(newSmallFolderName.value||"").trim(); const big=currentBig();
+  if(!big){ alert("大フォルダを選択してください"); return; }
+  if(!sm){ alert("小フォルダ名を入力してください"); return; }
+  ensureSmall(big, sm); saveStore(store); newSmallFolderName.value=""; refreshSmallSelect();
+}
+function deleteSmallFolder(){
+  const big=currentBig(); const sm=currentSmall();
+  if(!big || !sm){ alert("削除する小フォルダを選択してください"); return; }
+  if(!confirm(`小フォルダ「${sm}」を削除しますか？（中の棋譜も削除）`)) return;
+  const pk = currentPath();
+  delete store.kifuByPath[pk];
+  delete store.queueByPath[pk];
+  store.smallByBig[big] = (store.smallByBig[big]||[]).filter(x=>x!==sm);
+  saveStore(store); refreshSmallSelect();
+}
+
+/* ====== 並び替え（大フォルダ／小フォルダ） ====== */
+function arrayMove(arr, from, to){
+  if(!Array.isArray(arr)) return false;
+  if(from === to) return false;
+  if(from < 0 || from >= arr.length) return false;
+  if(to < 0 || to >= arr.length) return false;
+  const item = arr.splice(from,1)[0];
+  arr.splice(to,0,item);
+  return true;
+}
+function reorderBigFolder(kind){
+  const prevBig = currentBig();
+  if(!prevBig) return;
+  const arr = store.bigFolders || [];
+  const idx = arr.findIndex(b => b.name === prevBig);
+  if(idx < 0) return;
+  let to = idx;
+  if(kind === 'UP') to = idx - 1;
+  if(kind === 'DOWN') to = idx + 1;
+  if(kind === 'TOP') to = 0;
+  if(kind === 'BOTTOM') to = arr.length - 1;
+  if(to === idx) return;
+  if(to < 0 || to >= arr.length) return;
+  if(!arrayMove(arr, idx, to)) return;
+  saveStore(store);
+  refreshBigSelect();
+  bigFolderSelect.value = prevBig;
+  refreshSmallSelect();
+  showToast('大フォルダの順序を変更しました');
+}
+function reorderSmallFolder(kind){
+  const big = currentBig();
+  if(!big) return;
+  const list = store.smallByBig[big] || [];
+  if(list.length <= 1) return;
+  const sm = currentSmall();
+  if(!sm){ return; }
+  const idx = list.indexOf(sm);
+  if(idx < 0) return;
+  let to = idx;
+  if(kind === 'UP') to = idx - 1;
+  if(kind === 'DOWN') to = idx + 1;
+  if(kind === 'TOP') to = 0;
+  if(kind === 'BOTTOM') to = list.length - 1;
+  if(to === idx) return;
+  if(to < 0 || to >= list.length) return;
+  if(!arrayMove(list, idx, to)) return;
+  store.smallByBig[big] = list;
+  saveStore(store);
+  refreshSmallSelect();
+  smallFolderSelect.value = sm;
+  updateCountsAndPath();
+  showToast('小フォルダの順序を変更しました');
+}
+
+/* ====== Drag & Drop 並び替え ====== */
+let dragState = null;
+function makeReorderItem(name, scope){
+  const el = document.createElement('span');
+  el.className = 'reorder-item';
+  el.draggable = true;
+  el.textContent = name;
+  el.dataset.name = name;
+  el.dataset.scope = scope;
+
+  el.addEventListener('dragstart', (e)=>{
+    dragState = { scope, name };
+    el.classList.add('dragging');
+    try{ e.dataTransfer.effectAllowed='move'; }catch(_){}
+  });
+  el.addEventListener('dragend', ()=>{
+    dragState = null;
+    el.classList.remove('dragging');
+    clearDropHints(scope);
+  });
+  el.addEventListener('dragover', (e)=>{
+    if(!dragState || dragState.scope!==scope) return;
+    e.preventDefault();
+    const rect = el.getBoundingClientRect();
+    const after = (e.clientX - rect.left) > (rect.width / 2);
+    el.classList.toggle('drop-after', after);
+    el.classList.toggle('drop-before', !after);
+  });
+  el.addEventListener('dragleave', ()=>{
+    el.classList.remove('drop-before','drop-after');
+  });
+  el.addEventListener('drop', (e)=>{
+    if(!dragState || dragState.scope!==scope) return;
+    e.preventDefault();
+    const after = el.classList.contains('drop-after');
+    commitReorder(scope, dragState.name, el.dataset.name, after);
+  });
+  return el;
+}
+function clearDropHints(scope){
+  const list = scope==='big' ? bigReorderList : smallReorderList;
+  if(!list) return;
+  list.querySelectorAll('.drop-before,.drop-after').forEach(n=>n.classList.remove('drop-before','drop-after'));
+}
+function renderReorderUI(){
+  if(bigReorderList){
+    bigReorderList.innerHTML='';
+    const arr = store.bigFolders || [];
+    arr.forEach(b => bigReorderList.appendChild(makeReorderItem(b.name, 'big')));
+    bigReorderList.style.display = (arr.length>1)?'flex':'none';
+  }
+  if(smallReorderList){
+    smallReorderList.innerHTML='';
+    const big = currentBig();
+    const list = store.smallByBig[big] || [];
+    list.forEach(s => smallReorderList.appendChild(makeReorderItem(s, 'small')));
+    smallReorderList.style.display = (list.length>1)?'flex':'none';
+  }
+}
+function commitReorder(scope, draggedName, targetName, placeAfter){
+  if(scope==='big'){
+    const arr = store.bigFolders || [];
+    const from = arr.findIndex(b=>b.name===draggedName);
+    const toBase = arr.findIndex(b=>b.name===targetName);
+    if(from<0 || toBase<0) return;
+    let to = toBase + (placeAfter?1:0);
+    if(from < to) to--;
+    if(from === to) return;
+    const [item] = arr.splice(from, 1);
+    arr.splice(to, 0, item);
+    saveStore(store);
+    const prev = currentBig();
+    refreshBigSelect();
+    if(prev) bigFolderSelect.value = prev;
+    refreshSmallSelect();
+    renderReorderUI();
+    showToast('大フォルダの順序を変更しました');
+  }else if(scope==='small'){
+    const big = currentBig(); if(!big) return;
+    const list = store.smallByBig[big] || [];
+    const from = list.indexOf(draggedName);
+    const toBase = list.indexOf(targetName);
+    if(from<0 || toBase<0) return;
+    let to = toBase + (placeAfter?1:0);
+    if(from < to) to--;
+    if(from === to) return;
+    const [item] = list.splice(from, 1);
+    list.splice(to, 0, item);
+    store.smallByBig[big] = list;
+    saveStore(store);
+    const prev = currentSmall();
+    refreshSmallSelect();
+    if(prev) smallFolderSelect.value = prev;
+    updateCountsAndPath();
+    renderReorderUI();
+    showToast('小フォルダの順序を変更しました');
+  }
+}
+
+/* ====== Toast ====== */
+function showToast(msg){
+  toastEl.textContent = msg;
+  toastEl.style.display = 'block';
+  setTimeout(()=>{ toastEl.style.display='none'; }, 1400);
+}
+
+/* ====== キュー／正解リスト／ユニーク数 ====== */
+// クリア判定（手動クリア優先。未設定ならノーミス到達実績で判定）
+function isCleared(k){
+  if(!k) return false;
+  if(typeof k.manualCleared === 'boolean') return k.manualCleared;
+  return !!(k.stats && (k.stats.solved||0) > 0);
+}
+
+
+function addToQueue(pk, id, buttonEl){
+  const q = store.queueByPath[pk] || (store.queueByPath[pk]=[]);
+  q.push(id); saveStore(store); updateQueueView();
+  if(buttonEl){
+    const old = buttonEl.textContent;
+    buttonEl.textContent = "✓ キュー追加";
+    buttonEl.disabled = true;
+    setTimeout(()=>{ buttonEl.textContent = old; buttonEl.disabled = false; }, 900);
+  }
+  showToast("キューに追加しました");
+}
+function clearQueue(pk){
+  store.queueByPath[pk] = []; saveStore(store); updateQueueView(); showToast("キューをクリアしました");
+}
+function updateQueueView(){
+  const pk = currentPath();
+  const q = getQueueByPath(pk);
+  queueView.innerHTML="";
+  q.slice(0,14).forEach((id, i)=>{
+    const chip=document.createElement('span'); chip.style.border="1px solid #ccc"; chip.style.padding="2px 6px"; chip.style.borderRadius="999px";
+    chip.textContent = (i+1)+"#"+id.slice(0,5);
+    queueView.appendChild(chip);
+  });
+  queueCountEl.textContent = q.length;
+}
+function renderSolvedList(){
+  const pk = currentPath();
+  const arr = getArrayByPath(pk);
+  const numbers = [];
+  (arr||[]).forEach((k, idx)=>{
+    if (isCleared(k)) numbers.push((typeof k._idx==='number' ? k._idx+1 : idx+1));
+  });
+  if(!numbers.length){
+    solvedListEl.textContent = "（まだ正解に到達した棋譜はありません）";
+  }else{
+    solvedListEl.textContent = numbers.join(" ");
+  }
+  // 全フォルダ横断で「クリア済み（チェックON）」の総数を表示
+const totalCleared = Object.values(store.kifuByPath || {}).reduce((sum, list) => {
+  const arr = Array.isArray(list) ? list : [];
+  return sum + arr.filter(k => isCleared(k)).length;
+}, 0);
+uniqueSolvedEl.textContent = String(totalCleared);
+}
+
+/* ====== 並び替え・検索 ====== */
+function getSortedArray(pk){
+  const arr = (store.kifuByPath[pk]||[]).slice();
+  arr.forEach((k, idx)=>{ if(typeof k._idx==="undefined") k._idx=idx; });
+  const by = sortByEl.value, dir = sortDirEl.value;
+  arr.sort((a,b)=>{
+    const sgn = (dir==="ASC"?1:-1);
+    if(by==="INDEX"){ return sgn * (a._idx - b._idx); }
+    if(by==="NAME"){ return sgn * ((a.name||"").localeCompare(b.name||"")); }
+    if(by==="LEN"){ return sgn * ((a.moves?.length||0) - (b.moves?.length||0)); }
+    if(by==="SOLVED"){ return sgn * ((a.stats?.solved||0) - (b.stats?.solved||0)); }
+    if(by==="MISTAKES"){ return sgn * ((a.stats?.mistakes||0) - (b.stats?.mistakes||0)); }
+    return 0;
+  });
+
+  const q = (searchInput.value||"").trim();
+  if(!q) return arr;
+  const keys = q.split(/\s+/).filter(Boolean).map(s=>s.toLowerCase());
+  return arr.filter(k=>{
+    const hay = [
+      (k.moves||[]).join(" "),
+      (k.name||""),
+      (k.comment||"")
+    ].join(" ").toLowerCase();
+    return keys.every(key => hay.includes(key));
+  });
+}
+function updateEnabledCount(){
+  const pk = currentPath();
+  const arr = getArrayByPath(pk);
+  const n = arr.filter(k=>k.enabled!==false).length;
+  enabledCountEl.textContent = n;
+  enabledCountModalEl.textContent = n;
+}
+
+/* ====== 棋譜一覧（モーダル） ====== */
+function openKifuModal(){
+  const pk = currentPath();
+  modalPathName.textContent = pk;
+  kifuModal.style.display='flex';
+  renderKifuList();
+}
+function closeKifuModal(){ kifuModal.style.display='none'; }
+
+function renderKifuList(){
+  const pk = currentPath();
+  const arr = getSortedArray(pk);
+  const frag = document.createDocumentFragment();
+
+  const title = document.createElement('div');
+  title.innerHTML = `<b>この小フォルダの棋譜</b>：${arr.length}件`;
+  frag.appendChild(title);
+
+  if(arr.length){
+    arr.forEach((k, idx) => {
+      if(typeof k.enabled === "undefined") k.enabled = true;
+      if(!k.stats) k.stats = { attempts:0, solved:0, mistakes:0 };
+
+      const row = document.createElement('div');
+      row.className = "klist-row";
+      row.dataset.id = k.id;
+
+      const idxSpan = document.createElement('div');
+      idxSpan.className = "kindex";
+      idxSpan.textContent = ((typeof k._idx === 'number' ? (k._idx + 1) : (idx + 1))) + ".";
+
+      const info = document.createElement('div');
+      info.className = "kinfo";
+
+      const movesStr = (k.moves||[]).join(" ");
+
+      const kifuWrap = document.createElement('div');
+      kifuWrap.className = "kifu-wrap";
+
+      const kifuLabel = document.createElement('div');
+      kifuLabel.className = "label";
+      kifuLabel.textContent = "棋譜";
+
+      const kifuInput = document.createElement('textarea');
+      kifuInput.className = "kifu-text";
+      kifuInput.value = movesStr;
+      kifuInput.setAttribute("readonly","readonly");
+      kifuInput.rows = 2;
+      kifuInput.addEventListener('click', ()=>{
+        kifuInput.focus();
+        kifuInput.select();
+      });
+
+      const kifuBtns = document.createElement('div');
+      kifuBtns.className = "kifu-btns";
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = "ghost";
+      copyBtn.textContent = "コピー";
+      copyBtn.addEventListener('click', async ()=>{
+        try{
+          await navigator.clipboard.writeText(movesStr);
+          showToast("棋譜をコピーしました");
+        }catch(e){
+          kifuInput.focus(); kifuInput.select();
+          const ok = document.execCommand('copy');
+          showToast(ok? "棋譜をコピーしました" : "コピーに失敗しました");
+        }
+      });
+
+      const lenSpan = document.createElement('span');
+      lenSpan.className = "small muted";
+      lenSpan.textContent = `（${(k.moves||[]).length}手）`;
+
+      kifuBtns.appendChild(copyBtn);
+      kifuBtns.appendChild(lenSpan);
+      kifuWrap.appendChild(kifuLabel);
+      kifuWrap.appendChild(kifuInput);
+      kifuWrap.appendChild(kifuBtns);
+
+      info.appendChild(kifuWrap);
+
+      const noteWrap = document.createElement('div');
+      noteWrap.className = "kifu-wrap";
+
+      const noteLabel = document.createElement('div');
+      noteLabel.className = "label";
+      noteLabel.textContent = "備考";
+
+      const noteInput = document.createElement('textarea');
+      noteInput.className = "kifu-text note-text";
+      noteInput.placeholder = "メモや気づき、対策などを自由に";
+      noteInput.rows = 2;
+      noteInput.value = (k.comment || "");
+
+      let saveTimer = null;
+      function saveDebounced(){
+        if(saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(()=>{ saveStore(store); }, 400);
+      }
+      noteInput.addEventListener('input', ()=>{
+        k.comment = noteInput.value;
+        saveDebounced();
+      });
+      noteInput.addEventListener('change', ()=>{
+        k.comment = noteInput.value;
+        saveStore(store);
+      });
+
+      const noteBtns = document.createElement('div');
+      noteBtns.className = "kifu-btns";
+      const clearNoteBtn = document.createElement('button');
+      clearNoteBtn.className = "ghost";
+      clearNoteBtn.textContent = "削除";
+      clearNoteBtn.addEventListener('click', ()=>{
+        noteInput.value = "";
+        k.comment = "";
+        saveStore(store);
+        showToast("備考を削除しました");
+      });
+      noteBtns.appendChild(clearNoteBtn);
+
+      noteWrap.appendChild(noteLabel);
+      noteWrap.appendChild(noteInput);
+      noteWrap.appendChild(noteBtns);
+      info.appendChild(noteWrap);
+
+      const enableWrap = document.createElement('label');
+      enableWrap.className = "switch";
+      const enableChk = document.createElement('input');
+      enableChk.type = "checkbox";
+      enableChk.checked = !!k.enabled;
+      enableChk.addEventListener('change', ()=>{
+        k.enabled = !!enableChk.checked; saveStore(store); updateEnabledCount();
+      });
+      const enableTxt = document.createElement('span');
+      enableTxt.textContent = "出題オン";
+      enableWrap.appendChild(enableChk);
+      enableWrap.appendChild(enableTxt);
+// --- manual clear (クリア済み) checkbox under 出題オン ---
+const controlCol = document.createElement('div');
+controlCol.style.display = 'flex';
+controlCol.style.flexDirection = 'column';
+controlCol.style.gap = '6px';
+controlCol.appendChild(enableWrap);
+
+const clearedWrap = document.createElement('label');
+clearedWrap.className = "switch";
+const clearedChk = document.createElement('input');
+clearedChk.type = "checkbox";
+clearedChk.checked = isCleared(k);
+clearedChk.addEventListener('change', ()=>{
+  k.manualCleared = !!clearedChk.checked;
+  saveStore(store);
+  renderSolvedList();
+});
+const clearedTxt = document.createElement('span');
+clearedTxt.textContent = "クリア済み";
+clearedWrap.appendChild(clearedChk);
+clearedWrap.appendChild(clearedTxt);
+controlCol.appendChild(clearedWrap);
+
+
+      const queueBtn = document.createElement('button');
+      queueBtn.textContent = "キューに追加";
+      queueBtn.addEventListener('click', ()=>{
+        const q = getQueueByPath(pk);
+        if(!q.includes(k.id)){ q.push(k.id); saveStore(store); updateQueueView(); showToast("キューに追加しました"); }
+        else showToast("すでにキューにあります");
+      });
+
+      const delBtn = document.createElement('button');
+      delBtn.className = "danger.ghost".replace('.', ' ');
+      delBtn.textContent = "削除";
+      delBtn.addEventListener('click', ()=>{
+        if(!confirm("この棋譜を削除しますか？")) return;
+        let arr2 = (store.kifuByPath[pk]||[]);
+        const idx2 = arr2.findIndex(x=>x.id===k.id);
+        if(idx2>=0){ arr2.splice(idx2,1); saveStore(store); renderKifuList(); updateEnabledCount(); updateQueueView(); }
+      });
+
+      row.appendChild(idxSpan);
+      row.appendChild(info);
+      row.appendChild(controlCol);
+      row.appendChild(queueBtn);
+      row.appendChild(delBtn);
+
+      frag.appendChild(row);
+    });
+  }else{
+    const p=document.createElement('div'); p.className="small muted"; p.textContent="（まだ棋譜がありません）"; frag.appendChild(p);
+  }
+  kifuList.innerHTML=""; kifuList.appendChild(frag);
+  updateEnabledCount();
+  updateQueueView();
+  renderSolvedList();
+  ensureBulkButtons();
+}
+
+/* ====== 棋譜追加 ====== */
+function addKifuGuarded(){
+  const big = currentBig();
+  const sm  = currentSmall();
+  if(!big){ showToast("大フォルダを定義して下さい"); return; }
+  if(!sm){ showToast("小フォルダを定義して下さい"); return; }
+  addKifuToCurrent();
+}
+function addKifuToCurrent(){
+  const pk = currentPath();
+  const lines = kifuInput.value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  if(!lines.length){ alert("棋譜を1行以上入力してください"); return; }
+  const arr = store.kifuByPath[pk] || (store.kifuByPath[pk]=[]);
+  let okCount=0, dupCount=0, ngMsgs=[];
+  for(const line of lines){
+    const tokens = tokenizeKifuString(line);
+    if(tokens === null){ ngMsgs.push(`・${line.slice(0,50)}${line.length>50?'…':''} → 形式が不正`); continue; }
+    if(tokens.length===0){ ngMsgs.push(`・空行`); continue; }
+    if(tokens.length>60){ ngMsgs.push(`・${line.slice(0,20)}… → 60手を超過`); continue; }
+    const val = validateMoves(tokens);
+    if(!val.ok){ ngMsgs.push(`・${line.slice(0,50)}${line.length>50?'…':''} → ${val.error}`); continue; }
+    const sig = canonicalSignature(tokens);
+    if(arr.some(k=>k.sig===sig)){ dupCount++; continue; }
+    arr.push({ id: Date.now().toString(36)+Math.random().toString(36).slice(2,7),
+               moves: tokens, sig, enabled: true, name:"", tags:[], comment:"", addedAt: Date.now(), _idx: arr.length,
+               stats: { attempts:0, solved:0, mistakes:0 } });
+    okCount++;
+  }
+  saveStore(store);
+  if(okCount) showToast(`${okCount}件の棋譜を追加（重複スキップ：${dupCount}）`);
+  if(ngMsgs.length) alert("追加できなかった棋譜があります：\n" + ngMsgs.join("\n"));
+  kifuInput.value="";
+  updateCountsAndPath();
+  if(kifuModal.style.display==='flex') renderKifuList();
+}
+
+/* ====== 出題ロジック ====== */
+function getArrSortedCurrent(){ return getSortedArray(currentPath()); }
+function getEnabledArrCurrent(){ return getArrSortedCurrent().filter(k=>k.enabled!==false); }
+function pickKifu(){
+  const pk = currentPath();
+  const arrSorted = getArrSortedCurrent();
+  const enabledArr = getEnabledArrCurrent();
+  let picked = null;
+  const mode = pickModeEl.value;
+  if(mode === "RANDOM"){
+    if(enabledArr.length===0){ alert("出題オンの棋譜がありません（チェックを入れてください）"); return null; }
+    picked = enabledArr[Math.floor(Math.random()*enabledArr.length)];
+  }else if(mode === "NUMBER"){
+    const n = parseInt(kifuNumberInput.value,10);
+    if(!(n>=1 && n<=arrSorted.length)){ alert(`番号は 1〜${arrSorted.length} の範囲で指定してください`); return null; }
+    picked = arrSorted[n-1];
+  }else if(mode === "NUMBER_ENABLED"){
+    if(enabledArr.length===0){ alert("出題オンの棋譜がありません（チェックを入れてください）"); return null; }
+    const n = parseInt(kifuNumberInput.value,10);
+    if(!(n>=1 && n<=enabledArr.length)){ alert(`番号は 1〜${enabledArr.length}（出題オンのみ）で指定してください`); return null; }
+    picked = enabledArr[n-1];
+  }else if(mode === "QUEUE"){
+    const q = getQueueByPath(pk);
+    while(q.length){
+      const id = q.shift();
+      const cand = arrSorted.find(k=>k.id===id);
+      if(cand){ picked=cand; break; }
+    }
+    saveStore(store); updateQueueView();
+    if(!picked){
+      if(enabledArr.length===0){ alert("キューが空です。出題オンの棋譜もありません。"); return null; }
+      picked = enabledArr[Math.floor(Math.random()*enabledArr.length)];
+      showToast("キューが空のため、ランダムで出題します");
+    }
+  }else if(mode === "UNSOLVED"){
+    const cand = enabledArr.filter(k => !isCleared(k));
+    if(cand.length===0){ alert("未クリアの出題オンの棋譜がありません。"); return null; }
+    picked = cand[Math.floor(Math.random()*cand.length)];
+  }else if(mode === "HARD"){
+    if(enabledArr.length===0){ alert("出題オンの棋譜がありません（チェックを入れてください）"); return null; }
+    const ranked = enabledArr.slice().sort((a,b)=>{
+      const ra = (a.stats?.mistakes||0) / Math.max(1, (a.stats?.attempts||0));
+      const rb = (b.stats?.mistakes||0) / Math.max(1, (b.stats?.attempts||0));
+      if(rb !== ra) return rb - ra;
+      return (b.stats?.mistakes||0) - (a.stats?.mistakes||0);
+    });
+    picked = ranked[0];
+  }
+  return picked;
+}
+
+/* ====== セッション進行 ====== */
+function setStatus(msg){ statusEl.textContent = msg; }
+function setProgress(){
+  const done = Math.max(0, Math.min(moveIndex - (rangeStart-1), rangeEnd - rangeStart + 1));
+  const total = Math.max(0, rangeEnd - rangeStart + 1);
+  progressEl.textContent = `${done} / ${total}`;
+  mistakesNowEl.textContent = `${sessionMistakes}`;
+}
+function startTrainingWithKifuId(id){
+  const arr = getArrSortedCurrent();
+  const picked = arr.find(k=>k.id===id);
+  if(!picked){ alert("指定の棋譜が見つかりません"); return; }
+  return startTrainingCore(picked);
+}
+function startTraining(){
+  const picked = pickKifu();
+  if(!picked) return;
+  return startTrainingCore(picked);
+}
+function startTrainingCore(picked){
+  myColor = (document.querySelector('input[name="myColor"]:checked').value === 'BLACK') ? BLACK : WHITE;
+  syncSelfBothUI();
+  expectedMoves = picked.moves.slice();
+  currentKifuId = picked.id;
+  updateBoardIndexLabel();
+  const rawS = parseInt(startIndexInput.value || "1", 10);
+  const rawE = parseInt(endIndexInput.value || String(expectedMoves.length), 10);
+  rangeStart = isFinite(rawS) ? Math.max(1, Math.min(rawS, expectedMoves.length)) : 1;
+  rangeEnd = isFinite(rawE) ? Math.max(rangeStart, Math.min(rawE, expectedMoves.length)) : expectedMoves.length;
+
+  board = newBoard();
+  currentPlayer = BLACK;
+  moveIndex = 0;
+  training = true;
+  sessionMistakes = 0;
+
+  const pk=currentPath();
+  const arr = store.kifuByPath[pk] || [];
+  const k = arr.find(x=>x.id===currentKifuId);
+  if(k){ k.stats = k.stats || { attempts:0, solved:0, mistakes:0 }; k.stats.attempts++; saveStore(store); }
+
+  setStatus(`トレーニング開始：${pk} / ${expectedMoves.length}手（開始=${rangeStart} / 終了=${rangeEnd}）`);
+  setPositionByTokenIndex(rangeStart - 1);
+  renderBoard();
+  setProgress();
+  stepIfAIShouldPlay(true);
+  hideCelebrate();
+}
+function setPositionByTokenIndex(idx){
+  board = newBoard();
+  currentPlayer = BLACK;
+  let i = 0;
+  let passes=0;
+  while(i < idx){
+    const token = expectedMoves[i];
+    const LM = legalMoves(board, currentPlayer);
+    if(token==="P" || token==="PASS"){
+      if(LM.length>0){ setStatus(`${i+1}手目：PASS指定ですが合法手があります。棋譜が不正です。`); training=false; break; }
+      currentPlayer = -currentPlayer; i++; passes++; if(passes>=2) break;
+      continue;
+    }
+    if(LM.length===0){
+      currentPlayer = -currentPlayer; passes++; if(passes>=2) break;
+      continue;
+    }
+    passes=0;
+    const rc = coordToRC(token);
+    const match = legalMoves(board, currentPlayer).find(m=>m.r===rc[0] && m.c===rc[1]);
+    if(!match){ setStatus(`${i+1}手目 ${token} は合法でありません。棋譜が不正です。`); training=false; break; }
+    applyMove(board, match, currentPlayer);
+    currentPlayer = -currentPlayer; i++;
+  }
+  moveIndex = i;
+}
+function stepIfAIShouldPlay(startPhase=false){
+  if(!training) return;
+
+  if(selfBothMode){
+    if(startPhase){
+      setStatus(`両方を自分で打つモード：${moveIndex+1}手目から期待手どおりに進めてください。`);
+    }
+    checkFinishIfNeeded();
+    return;
+  }
+
+  const aiColor = -myColor;
+  let progressed = false;
+  while(training && currentPlayer === aiColor && moveIndex < expectedMoves.length && moveIndex < rangeEnd){
+    const token = expectedMoves[moveIndex];
+    const LM = legalMoves(board, currentPlayer);
+    if(token==="P" || token==="PASS"){
+      if(LM.length>0){ setStatus(`棋譜${moveIndex+1}手目はPASS指定ですが合法手があります。棋譜が不正です。`); training=false; return; }
+      currentPlayer = -currentPlayer; moveIndex++; progressed = true; setProgress(); continue;
+    }
+    if(LM.length===0){
+      currentPlayer = -currentPlayer; progressed = true; continue;
+    }
+    const rc = coordToRC(token); if(!rc){ setStatus(`棋譜${moveIndex+1}手目が不正: ${token}`); training=false; return; }
+    const match = LM.find(m=>m.r===rc[0] && m.c===rc[1]);
+    if(!match){ setStatus(`棋譜${moveIndex+1}手目 ${token} は合法でありません。棋譜が不正です。`); training=false; return; }
+    applyMove(board, match, currentPlayer);
+    currentPlayer = -currentPlayer; moveIndex++; progressed = true; setProgress(); renderBoard();
+    renderReorderUI();
+  }
+  if(progressed && startPhase && currentPlayer===myColor){
+    setStatus(`あなたの番です。期待手どおりに打ってください（${moveIndex+1}手目）。`);
+  }
+  checkFinishIfNeeded();
+}
+function onCellClick(e){
+  const cell=this;
+  if(boardWrap.classList.contains('legal-only') && !cell.classList.contains('legal')){ return; }
+  const r=parseInt(cell.dataset.r,10); const c=parseInt(cell.dataset.c,10); const coord=cell.dataset.coord;
+  if(!training || (!selfBothMode && currentPlayer !== myColor)) return;
+  if(moveIndex >= expectedMoves.length || moveIndex >= rangeEnd) return;
+  if(legalMoves(board, currentPlayer).length===0){
+    currentPlayer=-currentPlayer; stepIfAIShouldPlay(); return;
+  }
+  if(board[r][c] !== EMPTY){ return; }
+  const token = expectedMoves[moveIndex]; if(!token) return;
+  if(token==="P" || token==="PASS"){
+    const LM=legalMoves(board,currentPlayer);
+    if(LM.length===0){ currentPlayer=-currentPlayer; moveIndex++; setProgress(); renderBoard(); stepIfAIShouldPlay(); return; }
+    sessionMistakes++; playSound("ng"); flashX(cell); setStatus("この手番はPASS指定ではありません。"); setProgress(); return;
+  }
+  if(coord !== token){
+    sessionMistakes++; playSound("ng"); flashX(cell); setStatus(`× 不正解。期待手は ${token} です。もう一度どうぞ。`); setProgress(); return;
+  }
+  const LM = legalMoves(board, currentPlayer);
+  const match = LM.find(m=>m.r===r && m.c===c);
+  if(!match){
+    sessionMistakes++; playSound("ng"); flashX(cell); setStatus(`その手（${coord}）は合法手ではありません。棋譜が不整合の可能性があります。`); setProgress(); return;
+  }
+  applyMove(board, match, currentPlayer); playSound("ok");
+  currentPlayer = -currentPlayer; moveIndex++; setProgress(); renderBoard(); stepIfAIShouldPlay();
+}
+function checkFinishIfNeeded(){
+  if(!training) return;
+  if(moveIndex >= expectedMoves.length || moveIndex >= rangeEnd){
+    training=false;
+    const pk = currentPath();
+    const arr = store.kifuByPath[pk] || [];
+    const k = arr.find(x=>x.id===currentKifuId);
+    if(k){
+      k.stats.mistakes += sessionMistakes;
+      const firstSolvedBefore = (k.stats.solved>0);
+      if(sessionMistakes===0){ k.stats.solved++; k.manualCleared = true; }
+      saveStore(store);
+      if(!firstSolvedBefore && sessionMistakes===0){
+        store.learnedOnceIds = Array.from(new Set([...(store.learnedOnceIds||[]), k.id]));
+        saveStore(store);
+      }
+      renderSolvedList();
+      if (kifuModal && kifuModal.style.display==='flex') { try{ renderKifuList(); }catch(e){} }
+    }
+    playSound("success");
+    const total = rangeEnd - rangeStart + 1;
+    setStatus(`暗記成功！範囲 ${rangeStart}〜${rangeEnd}（全${total}手）を再現しました。${sessionMistakes===0?'（ミスなし）':'（誤答 '+sessionMistakes+' 回）'}`);
+    showCelebrate(total, sessionMistakes);
+  }
+}
+function flashX(cell){ cell.classList.add('xmark'); setTimeout(()=>cell.classList.remove('xmark'),600); }
+
+/* ====== 祝福演出 ====== */
+function showCelebrate(total, mistakes){
+  populateResultPanel();
+  celebrateMsg.textContent = `再現手数：${total}　誤答：${mistakes} 回`;
+  celebrateLayer.style.display = 'flex';
+  const N=60;
+  const frag=document.createDocumentFragment();
+  for(let i=0;i<N;i++){
+    const d=document.createElement('div');
+    d.className='confetti';
+    d.style.setProperty('--x', Math.random()*380 + 'px');
+    d.style.setProperty('--h', Math.floor(Math.random()*360));
+    d.style.setProperty('--r', Math.floor(Math.random()*360) + 'deg');
+    d.style.left = (Math.random()* (boardWrap.clientWidth-20)) + 'px';
+    d.style.top = '-20px';
+    frag.appendChild(d);
+  }
+  celebrateLayer.querySelectorAll('.confetti').forEach(n=>n.remove());
+  celebrateLayer.appendChild(frag);
+}
+function hideCelebrate(){ celebrateLayer.style.display='none'; }
+repeatBtn.addEventListener('click', ()=>{ hideCelebrate(); if(currentKifuId) startTrainingWithKifuId(currentKifuId); });
+nextBtn.addEventListener('click', ()=>{ hideCelebrate(); startTraining(); });
+
+/* ====== Inspect（←/→） ====== */
+function enterInspect(){
+  if(!training) return;
+  inspectMode = true;
+  inspectIndex = moveIndex;
+  inspectBar.style.display = 'inline-block';
+  inspectAction.style.display = 'inline-block';
+}
+function exitInspectResume(){
+  if(!inspectMode) return;
+  setPositionByTokenIndex(inspectIndex);
+  inspectMode = false;
+  inspectBar.style.display = 'none';
+  inspectAction.style.display = 'none';
+  training = true;
+  renderBoard(); setProgress();
+  stepIfAIShouldPlay(true);
+}
+resumeBtn.addEventListener('click', exitInspectResume);
+window.addEventListener('keydown', (e)=>{
+  if(!training) return;
+  const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
+  if(tag==='input' || tag==='textarea' || tag==='select') return;
+  if(e.key==="ArrowLeft" || e.key==="ArrowRight"){
+    e.preventDefault();
+    if(!inspectMode) enterInspect();
+    if(e.key==="ArrowLeft"){
+      inspectIndex = Math.max(rangeStart-1, inspectIndex - 1);
+    }else if(e.key==="ArrowRight"){
+      inspectIndex = Math.min(rangeEnd, inspectIndex + 1);
+    }
+    setPositionByTokenIndex(inspectIndex);
+    renderBoard();
+    setStatus(`確認中：${inspectIndex+1}手目の局面（範囲 ${rangeStart}〜${rangeEnd}）`);
+  }
+});
+
+/* ====== 両方を自分で打つ：UI同期 ====== */
+function syncSelfBothUI(){
+  selfBothMode = !!(toggleSelfBothEl && toggleSelfBothEl.checked);
+  if (myColorRadios && myColorRadios.forEach) {
+    myColorRadios.forEach(r => { r.disabled = selfBothMode; });
+  }
+  updateLegalClickable();
+}
+
+/* ====== 全データ初期化 ====== */
+function resetAllData(){
+  if(!confirm("本アプリの全データ（大/小フォルダ・棋譜・キュー・統計・学習済み数）を初期化してよろしいですか？\n※ この操作は取り消せません。")) return;
+  try {
+    localStorage.removeItem(STORE_KEY_V6);
+    (LEGACY_KEYS||[]).forEach(k => { try{ localStorage.removeItem(k); }catch(e){} });
+  } catch(e) { /* ignore */ }
+  store = defaultStore();
+  saveStore(store);
+
+  if(kifuModal) kifuModal.style.display='none';
+  training = false;
+  sessionMistakes = 0;
+  expectedMoves = [];
+  rangeStart = 1;
+  rangeEnd = 0;
+  moveIndex = 0;
+  board = newBoard();
+  currentPlayer = BLACK;
+  currentKifuId = null;
+  inspectMode = false;
+  inspectIndex = 0;
+  selfBothMode = false;
+
+  if(kifuInput) kifuInput.value = "";
+  if(newBigFolderName) newBigFolderName.value = "";
+  if(newBigFolderColor) newBigFolderColor.value = "";
+  if(newSmallFolderName) newSmallFolderName.value = "";
+  if(toggleHintEl) toggleHintEl.checked = false;
+  if(toggleMiniCoordEl) toggleMiniCoordEl.checked = false;
+  if(toggleSoundEl) toggleSoundEl.checked = true;
+  if(toggleSelfBothEl) toggleSelfBothEl.checked = false;
+  if(myColorRadios && myColorRadios.forEach){
+    myColorRadios.forEach(r => { r.disabled = false; r.checked = (r.value === 'BLACK'); });
+  }
+
+  renderAxes(); ensureCells();
+  refreshBigSelect();
+  updateCountsAndPath();
+  renderSolvedList();
+  updateQueueView();
+  hideCelebrate();
+  setStatus("初期化しました。大/小フォルダを選び、棋譜を登録して開始してください。");
+  setProgress();
+  renderBoard();
+  showToast("アプリを初期化しました");
+}
+
+/* ====== 初期化とイベント ====== */
+function init(){
+  fitBoardToViewport();
+  toggleHintEl.checked = false;
+  // 並び替え 初期状態：表示順（追加順）／昇順／検索空白
+  if (typeof sortByEl !== 'undefined' && sortByEl) sortByEl.value = 'INDEX';
+  if (typeof sortDirEl !== 'undefined' && sortDirEl) sortDirEl.value = 'ASC';
+  if (typeof searchInput !== 'undefined' && searchInput) searchInput.value = '';
+  toggleMiniCoordEl.checked = false;
+  (store.bigFolders||[]).forEach(b=> ensureBig(b.name));
+  saveStore(store);
+  refreshBigSelect();
+  renderAxes(); ensureCells();
+  if (toggleSelfBothEl) syncSelfBothUI();
+  setStatus("大/小フォルダを選び、棋譜を登録して開始してください。");
+  setProgress(); renderBoard();
+}
+init();
+
+bigFolderSelect.addEventListener('change', refreshSmallSelect);
+if (typeof newBigFolderName !== 'undefined' && newBigFolderName) {
+  newBigFolderName.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addBigFolder(); }
+  });
+}
+addBigFolderBtn.addEventListener('click', addBigFolder);
+deleteBigFolderBtn.addEventListener('click', deleteBigFolder);
+
+addSmallFolderBtn.addEventListener('click', addSmallFolder);
+deleteSmallFolderBtn.addEventListener('click', deleteSmallFolder);
+smallFolderSelect.addEventListener('change', updateCountsAndPath);
+
+if (bigUpBtn) bigUpBtn.addEventListener('click', ()=> reorderBigFolder('UP'));
+if (bigDownBtn) bigDownBtn.addEventListener('click', ()=> reorderBigFolder('DOWN'));
+if (bigTopBtn) bigTopBtn.addEventListener('click', ()=> reorderBigFolder('TOP'));
+if (bigBottomBtn) bigBottomBtn.addEventListener('click', ()=> reorderBigFolder('BOTTOM'));
+if (smallUpBtn) smallUpBtn.addEventListener('click', ()=> reorderSmallFolder('UP'));
+if (smallDownBtn) smallDownBtn.addEventListener('click', ()=> reorderSmallFolder('DOWN'));
+if (smallTopBtn) smallTopBtn.addEventListener('click', ()=> reorderSmallFolder('TOP'));
+if (smallBottomBtn) smallBottomBtn.addEventListener('click', ()=> reorderSmallFolder('BOTTOM'));
+
+openListBtn.addEventListener('click', openKifuModal);
+closeModalBtn.addEventListener('click', closeKifuModal);
+
+addKifuBtn.addEventListener('click', addKifuGuarded);
+clearKifuInputBtn.addEventListener('click', ()=> kifuInput.value="" );
+
+sortByEl.addEventListener('change', renderKifuList);
+sortDirEl.addEventListener('change', renderKifuList);
+searchInput.addEventListener('input', renderKifuList);
+clearSearchBtn.addEventListener('click', ()=>{
+  // 初期設定：表示順（追加順）／昇順／検索空白
+  sortByEl.value = 'INDEX';
+  sortDirEl.value = 'ASC';
+  searchInput.value = '';
+  renderKifuList();
+});
+
+startBtn.addEventListener('click', startTraining);
+resetBtn.addEventListener('click', ()=>{ training=false; sessionMistakes=0; expectedMoves=[]; rangeStart=1; rangeEnd=0; moveIndex=0; board=newBoard(); currentPlayer=BLACK; hideCelebrate(); setStatus("盤面を初期化しました。"); setProgress(); renderBoard(); });
+
+toggleHintEl.addEventListener('change', ()=> renderBoard());
+toggleMiniCoordEl.addEventListener('change', ()=> renderBoard());
+
+if (toggleSelfBothEl) {
+  toggleSelfBothEl.addEventListener('change', ()=>{
+    syncSelfBothUI();
+    if (training) {
+      setStatus(selfBothMode 
+        ? `両方を自分で打つモード：${moveIndex+1}手目から再開してください。`
+        : `通常モードに戻りました。`);
+      renderBoard();
+    }
+  });
+}
+
+clearQueueBtn.addEventListener('click', ()=> clearQueue(currentPath()));
+peekQueueBtn.addEventListener('click', ()=>{
+  const pk=currentPath(); const q=getQueueByPath(pk);
+  if(!q.length){ alert("キューは空です。"); return; }
+  const arr=getArrSortedCurrent();
+  const id=q[0]; const k=arr.find(x=>x.id===id);
+  if(!k){ alert("キュー先頭の棋譜は存在しません（削除された可能性）。"); return; }
+  alert(`キュー先頭（次に出題）：\n${(k.name?`「${k.name}」\n`:"")}${k.moves.join(" ")}\n（${k.moves.length}手）`);
+});
+
+exportBtn.addEventListener('click', ()=>{
+  const blob = new Blob([JSON.stringify(store,null,2)], {type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download="reversi_trainer_store_v6.json";
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 1000);
+});
+importBtn.addEventListener('click', ()=> importFile.click());
+if(initAllBtn){ initAllBtn.addEventListener('click', resetAllData); }
+importFile.addEventListener('change', ()=>{
+  const file=importFile.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    try{
+      const obj=JSON.parse(reader.result);
+      if(!obj || !Array.isArray(obj.bigFolders) || typeof obj.kifuByPath!=="object") throw new Error("形式が不正です");
+      if(!obj.smallByBig) obj.smallByBig={};
+      if(!obj.queueByPath) obj.queueByPath={};
+      if(!obj.learnedOnceIds) obj.learnedOnceIds=[];
+      store=obj; saveStore(store); refreshBigSelect(); updateCountsAndPath(); alert("インポートしました");
+    }catch(err){ alert("インポート失敗：" + err.message); }
+  };
+  reader.readAsText(file,"utf-8");
+});
+
+/* ====== v6.1 Additions ====== */
+function ensureBulkButtons(){
+  const footerRow = kifuModal.querySelector('.footer .row');
+  if(!footerRow) return;
+
+  if(!footerRow.querySelector('#enableAllBtn')){
+    const enableBtn = document.createElement('button');
+    enableBtn.id = 'enableAllBtn';
+    enableBtn.className = 'ghost';
+    enableBtn.textContent = '出題オンをすべて入れる';
+    enableBtn.addEventListener('click', ()=> bulkEnable(true));
+    footerRow.insertBefore(enableBtn, footerRow.firstChild);
+  }
+  if(!footerRow.querySelector('#disableAllBtn')){
+    const disableBtn = document.createElement('button');
+    disableBtn.id = 'disableAllBtn';
+    disableBtn.className = 'ghost';
+    disableBtn.textContent = '出題オンを一括で外す';
+    disableBtn.addEventListener('click', ()=> bulkEnable(false));
+    footerRow.insertBefore(disableBtn, footerRow.firstChild);
+  }
+}
+function bulkEnable(flag){
+  const pk = currentPath();
+  const arr = store.kifuByPath[pk] || [];
+  if(!arr.length){ showToast("対象の棋譜がありません"); return; }
+  const msg = flag ? "この小フォルダ内の全棋譜を 出題オン にします。よろしいですか？"
+                   : "この小フォルダ内の全棋譜の 出題オン を外します。よろしいですか？";
+  if(!confirm(msg)) return;
+  arr.forEach(k => { k.enabled = !!flag; });
+  saveStore(store);
+  renderKifuList();
+  updateEnabledCount();
+  showToast(flag ? "すべて出題オンにしました" : "すべて出題オフにしました");
+}
+if (typeof searchInput !== 'undefined' && searchInput) {
+  searchInput.placeholder = "棋譜／備考／名前で検索（空白区切りAND）";
+}
+(function(){
+  const btn = document.getElementById('clearStatsBtn');
+  if(btn && !btn.dataset.patched){
+    btn.dataset.patched = "1";
+    btn.addEventListener('click', ()=>{
+      const pk = currentPath();
+      const arr = store.kifuByPath[pk] || [];
+      if(!arr.length){ alert("この小フォルダには棋譜がありません。"); return; }
+      if(!confirm("この小フォルダ内の統計（attempts/solved/mistakes）をすべて0にリセットします。よろしいですか？")) return;
+      arr.forEach(k => { k.stats = { attempts:0, solved:0, mistakes:0 }; });
+      saveStore(store);
+      renderKifuList();
+      showToast("統計をリセットしました");
+    });
+  }
+})();
+</script>
+
+<!-- ===== Collapsible chip lists for 大/小フォルダ（初期は折りたたみ） ===== -->
+<script>
+(function(){
+  var uiBigOpen = localStorage.getItem(STORE_PREFIX + 'ui_bigReorderOpen') === '1';
+  var uiSmallOpen = localStorage.getItem(STORE_PREFIX + 'ui_smallReorderOpen') === '1';
+
+  function applyReorderVisibility(){
+    try{
+      var bigBtn = document.getElementById('toggleBigReorderBtn');
+      var smallBtn = document.getElementById('toggleSmallReorderBtn');
+      var bigList = document.getElementById('bigReorderList');
+      var smallList = document.getElementById('smallReorderList');
+      if(bigBtn && bigList){
+        var canShowBig = (store.bigFolders||[]).length > 1;
+        bigList.style.display = (uiBigOpen && canShowBig) ? 'flex' : 'none';
+        bigBtn.textContent = uiBigOpen ? '大フォルダリストを非表示' : '大フォルダを並べ替える';
+        bigBtn.style.display = canShowBig ? 'inline-block' : 'none';
+      }
+      if(smallBtn && smallList){
+        var big = (typeof currentBig === 'function') ? currentBig() : (window.bigFolderSelect ? bigFolderSelect.value : '');
+        var list = (store.smallByBig && big) ? (store.smallByBig[big]||[]) : [];
+        var canShowSmall = list.length > 1;
+        smallList.style.display = (uiSmallOpen && canShowSmall) ? 'flex' : 'none';
+        smallBtn.textContent = uiSmallOpen ? '小フォルダリストを非表示' : '小フォルダを並べ替える';
+        smallBtn.style.display = canShowSmall ? 'inline-block' : 'none';
+      }
+    }catch(e){ /* ignore */ }
+  }
+
+  var _origRenderReorderUI = window.renderReorderUI;
+  window.renderReorderUI = function(){
+    if(typeof _origRenderReorderUI === 'function'){ _origRenderReorderUI(); }
+    applyReorderVisibility();
+  };
+
+  window.addEventListener('load', function(){
+    var bigBtn = document.getElementById('toggleBigReorderBtn');
+    var smallBtn = document.getElementById('toggleSmallReorderBtn');
+    if(bigBtn){
+      bigBtn.addEventListener('click', function(){
+        uiBigOpen = !uiBigOpen;
+        localStorage.setItem(STORE_PREFIX + 'ui_bigReorderOpen', uiBigOpen ? '1' : '0');
+        applyReorderVisibility();
       });
     }
-  </script>
+    if(smallBtn){
+      smallBtn.addEventListener('click', function(){
+        uiSmallOpen = !uiSmallOpen;
+        localStorage.setItem(STORE_PREFIX + 'ui_smallReorderOpen', uiSmallOpen ? '1' : '0');
+        applyReorderVisibility();
+      });
+    }
+    applyReorderVisibility();
+  });
+})();
+</script>
+
 </body>
 </html>
+
