@@ -4,6 +4,8 @@
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>オセロ暗記トレーナー v7（大/小フォルダ・コメント・検索・自打ち両側・持色UI修正）</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#222222">
 <style>
   :root { --cell: 56px; --gap: 2px; --left-col: 360px; }
   body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "YuGothic", Meiryo, sans-serif; margin: 20px; }
@@ -1989,6 +1991,14 @@ if (typeof searchInput !== 'undefined' && searchInput) {
     applyReorderVisibility();
   });
 })();
+</script>
+<script>
+  // PWA: service worker 登録
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./service-worker.js').catch(console.warn);
+    });
+  }
 </script>
 
 </body>
