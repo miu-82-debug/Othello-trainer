@@ -4,8 +4,6 @@
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>オセロ暗記トレーナー v7（大/小フォルダ・コメント・検索・自打ち両側・持色UI修正）</title>
-  <link rel="manifest" href="manifest.webmanifest">
-  <meta name="theme-color" content="#222222">
 <style>
   :root { --cell: 56px; --gap: 2px; --left-col: 360px; }
   body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "YuGothic", Meiryo, sans-serif; margin: 20px; }
@@ -110,6 +108,8 @@
   .modal .footer { padding: 10px 14px; border-top: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 
   .klist-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  /* rename-controls spacing */
+  .rename-controls{ display:grid; gap:8px; margin-top:6px; }
   .klist-row { display: grid; grid-template-columns: auto 1fr auto auto auto; gap: 10px; align-items: start; padding: 8px 0; border-bottom: 1px dashed #eee; }
   .kindex { width: 2.5em; text-align: right; color: #444; padding-top: 4px; }
   .kmeta { color: #444; font-size: 0.85rem; }
@@ -188,6 +188,25 @@
     .rightDock .dockGrid { grid-template-columns: 1fr; }
   }
 </style>
+
+<style>
+/* ===== v9 addons: heatmap overlay ===== */
+.cell .heat{
+  position:absolute; inset:0; border-radius:6px; pointer-events:none; display:none;
+}
+.cell .heat .cnt{
+  position:absolute; right:4px; bottom:4px; font-size:11px; color:#fff;
+  text-shadow:0 1px 2px rgba(0,0,0,0.7);
+}
+.board-wrap.heat-on .cell .heat{ display:block; }
+</style>
+
+<!-- PWA manifest & mobile meta (added by mobile patch 2025-10-20) -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#0a5a2a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
 </head>
 <body>
 <div class="topbar">
@@ -401,6 +420,18 @@ PASSは P または PASS。"></textarea>
         <input id="searchInput" placeholder="棋譜／備考／名前で検索（空白区切りAND）" style="min-width:280px;" type="text"/>
         <button class="ghost" id="clearSearchBtn">初期設定</button>
       </div>
+      <div class="rename-controls">
+        <div class="row wrap" id="renameBigRow">
+          <label>大フォルダ名：</label>
+          <input id="renameBigInput" type="text" placeholder="大フォルダ名を編集"/>
+          <button class="ghost" id="renameBigSaveBtn">保存</button>
+        </div>
+        <div class="row wrap" id="renameSmallRow">
+          <label>小フォルダ名：</label>
+          <input id="renameSmallInput" type="text" placeholder="小フォルダ名を編集"/>
+          <button class="ghost" id="renameSmallSaveBtn">保存</button>
+        </div>
+      </div>
       <button class="ghost" id="closeModalBtn">閉じる</button>
     </header>
     <div class="body">
@@ -595,6 +626,13 @@ const sortDirEl = document.getElementById('sortDir');
 const searchInput = document.getElementById('searchInput');
 const clearSearchBtn = document.getElementById('clearSearchBtn');
 const enabledCountModalEl = document.getElementById('enabledCountModal');
+
+const renameBigInput = document.getElementById('renameBigInput');
+const renameSmallInput = document.getElementById('renameSmallInput');
+const renameBigSaveBtn = document.getElementById('renameBigSaveBtn');
+const renameSmallSaveBtn = document.getElementById('renameSmallSaveBtn');
+const renameSmallRow = document.getElementById('renameSmallRow');
+
 
 const inspectBar = document.getElementById('inspectBar');
 const inspectAction = document.getElementById('inspectAction');
@@ -1208,6 +1246,19 @@ function openKifuModal(){
   const pk = currentPath();
   modalPathName.textContent = pk;
   kifuModal.style.display='flex';
+  try{
+    if (typeof renameBigInput !== 'undefined' && renameBigInput) { renameBigInput.value = currentBig() || ""; }
+    if (typeof renameSmallRow !== 'undefined' && renameSmallRow) {
+      const sm = currentSmall();
+      if (sm) {
+        renameSmallRow.style.display = 'flex';
+        if (renameSmallInput) renameSmallInput.value = sm;
+        if (renameSmallSaveBtn) renameSmallSaveBtn.disabled = false;
+      } else {
+        renameSmallRow.style.display = 'none';
+      }
+    }
+  }catch(e){}
   renderKifuList();
 }
 function closeKifuModal(){ kifuModal.style.display='none'; }
@@ -1400,6 +1451,112 @@ controlCol.appendChild(clearedWrap);
   updateQueueView();
   renderSolvedList();
   ensureBulkButtons();
+}
+
+
+/* ====== フォルダ名の編集（モーダル内） ====== */
+function _normalizeFolderName(s){ return String(s||"").trim(); }
+function _validateFolderName(s){
+  if(!s) return "名前を入力してください";
+  if(/[\/\\]/.test(s)) return "スラッシュ（/）やバックスラッシュ（\\）は使えません";
+  if(s==="__ROOT__") return "__ROOT__ は使用できません";
+  return "";
+}
+function doRenameBigFolder(){
+  try{
+    const oldBig = currentBig();
+    if(!oldBig){ alert("大フォルダが選択されていません"); return; }
+    const prevSmall = currentSmall();
+    const newBig = _normalizeFolderName(renameBigInput ? renameBigInput.value : "");
+    if(oldBig === newBig){ showToast("変更はありません"); return; }
+    const err = _validateFolderName(newBig);
+    if(err){ alert("大フォルダ名エラー：" + err); return; }
+    if((store.bigFolders||[]).some(b => b.name === newBig)){ alert("同名の大フォルダが既にあります"); return; }
+
+    // bigFolders: rename keeping defaultColor
+    const meta = (store.bigFolders||[]).find(b => b.name === oldBig);
+    if(!meta){ alert("現在の大フォルダが見つかりません"); return; }
+    meta.name = newBig;
+
+    // move smallByBig
+    store.smallByBig[newBig] = store.smallByBig[oldBig] || [];
+    if(newBig !== oldBig) delete store.smallByBig[oldBig];
+
+    // move kifuByPath & queueByPath keys
+    const oldPrefix = oldBig + "/";
+    const newPrefix = newBig + "/";
+    Object.keys(store.kifuByPath||{}).forEach(k => {
+      if(k.startsWith(oldPrefix)){
+        const suffix = k.slice(oldPrefix.length);
+        store.kifuByPath[newPrefix + suffix] = store.kifuByPath[k];
+        delete store.kifuByPath[k];
+      }
+    });
+    Object.keys(store.queueByPath||{}).forEach(k => {
+      if(k.startsWith(oldPrefix)){
+        const suffix = k.slice(oldPrefix.length);
+        store.queueByPath[newPrefix + suffix] = store.queueByPath[k];
+        delete store.queueByPath[k];
+      }
+    });
+
+    saveStore(store);
+    const keepSmall = prevSmall && (store.smallByBig[newBig]||[]).includes(prevSmall) ? prevSmall : (store.smallByBig[newBig]||[])[0] || "";
+    refreshBigSelect();
+    bigFolderSelect.value = newBig;
+    refreshSmallSelect();
+    if(keepSmall){ smallFolderSelect.value = keepSmall; }
+    updateCountsAndPath();
+    if(typeof modalPathName !== 'undefined' && modalPathName){ modalPathName.textContent = currentPath(); }
+    renderKifuList();
+    renderReorderUI();
+    showToast("大フォルダ名を変更しました");
+  }catch(e){
+    console.warn(e);
+    alert("大フォルダ名の変更でエラーが発生しました");
+  }
+}
+function doRenameSmallFolder(){
+  try{
+    const big = currentBig();
+    const oldSm = currentSmall();
+    if(!big){ alert("大フォルダが選択されていません"); return; }
+    if(!oldSm){ alert("小フォルダが選択されていません"); return; }
+    const newSm = _normalizeFolderName(renameSmallInput ? renameSmallInput.value : "");
+    if(oldSm === newSm){ showToast("変更はありません"); return; }
+    const err = _validateFolderName(newSm);
+    if(err){ alert("小フォルダ名エラー：" + err); return; }
+    const list = store.smallByBig[big] || [];
+    if(list.includes(newSm)){ alert("同名の小フォルダが既にあります"); return; }
+
+    // update small list
+    const idx = list.indexOf(oldSm);
+    if(idx < 0){ alert("小フォルダが見つかりません"); return; }
+    list[idx] = newSm;
+    store.smallByBig[big] = list;
+
+    // move path keys
+    const oldKey = pathKey(big, oldSm);
+    const newKey = pathKey(big, newSm);
+    store.kifuByPath[newKey] = store.kifuByPath[oldKey] || [];
+    store.queueByPath[newKey] = store.queueByPath[oldKey] || [];
+    if(newKey !== oldKey){
+      delete store.kifuByPath[oldKey];
+      delete store.queueByPath[oldKey];
+    }
+
+    saveStore(store);
+    refreshSmallSelect();
+    smallFolderSelect.value = newSm;
+    updateCountsAndPath();
+    if(typeof modalPathName !== 'undefined' && modalPathName){ modalPathName.textContent = currentPath(); }
+    renderKifuList();
+    renderReorderUI();
+    showToast("小フォルダ名を変更しました");
+  }catch(e){
+    console.warn(e);
+    alert("小フォルダ名の変更でエラーが発生しました");
+  }
 }
 
 /* ====== 棋譜追加 ====== */
@@ -1814,6 +1971,13 @@ if (smallBottomBtn) smallBottomBtn.addEventListener('click', ()=> reorderSmallFo
 openListBtn.addEventListener('click', openKifuModal);
 closeModalBtn.addEventListener('click', closeKifuModal);
 
+
+if (renameBigSaveBtn) renameBigSaveBtn.addEventListener('click', doRenameBigFolder);
+if (renameSmallSaveBtn) renameSmallSaveBtn.addEventListener('click', doRenameSmallFolder);
+if (renameBigInput) renameBigInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); doRenameBigFolder(); } });
+if (renameSmallInput) renameSmallInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); doRenameSmallFolder(); } });
+
+
 addKifuBtn.addEventListener('click', addKifuGuarded);
 clearKifuInputBtn.addEventListener('click', ()=> kifuInput.value="" );
 
@@ -1992,15 +2156,4091 @@ if (typeof searchInput !== 'undefined' && searchInput) {
   });
 })();
 </script>
+
+
+<style>
+
+/* ===== v8 addons: theme, chips, overlays, reorder handle ===== */
+:root{
+  --fg: #111;
+  --bg: #ffffff;
+  --card-bg: #ffffff;
+  --card-border: #e7e7e7;
+  --muted: #666;
+  --chip-bg: #eef3ff;
+  --chip-br: #c8d7ff;
+  --chip-fg: #174199;
+  --overlay-bg: rgba(0,0,0,0.55);
+}
+body{ background: var(--bg); color: var(--fg); }
+.card{ background: var(--card-bg); border-color: var(--card-border); }
+.muted, .small{ color: var(--muted); }
+
+body.theme-dark{
+  --fg: #e7ebf3;
+  --bg: #0f1216;
+  --card-bg: #151a1f;
+  --card-border: #2a2f3a;
+  --muted: #a9b2c3;
+  --chip-bg: #1a2638;
+  --chip-br: #2a3a58;
+  --chip-fg: #b1c6ff;
+}
+.axis{ color: #f0f0f0; }
+
+/* count overlay on board */
+.count-overlay{
+  position:absolute; right:10px; bottom:10px; z-index:6;
+  background: rgba(0,0,0,0.55); color:#fff; padding:3px 8px; border-radius:8px;
+  font-size:.88rem; font-variant-numeric: tabular-nums; pointer-events:none;
+}
+
+/* tag chips */
+.chips{ display:flex; gap:6px; flex-wrap:wrap; }
+.chip{ display:inline-flex; align-items:center; gap:6px; padding:3px 8px; border-radius:999px;
+       border:1px solid var(--chip-br); background: var(--chip-bg); color: var(--chip-fg); font-size:.82rem; }
+.chip .x{ cursor:pointer; user-select:none; }
+
+/* draggable rows highlight */
+.klist-row.dragging{ opacity:.65; }
+.klist-row.drop-before{ box-shadow: inset 0 3px 0 #8ab4ff; outline:2px dashed #8ab4ff; outline-offset:-6px; }
+.klist-row.drop-after{ box-shadow: inset 0 -3px 0 #8ab4ff; outline:2px dashed #8ab4ff; outline-offset:-6px; }
+
+/* inline help link style */
+.inline-help{ font-size:.82rem; text-decoration:underline; cursor:pointer; }
+
+</style>
 <script>
-  // PWA: service worker 登録
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw-v2.js').catch(console.warn);
+
+/* ===== v8 Addons by ChatGPT (2025-10-19) ===== */
+(function(){
+  const OPT = (k, d) => { try{ const v = localStorage.getItem(STORE_PREFIX + 'opt_' + k); return v==null?d:JSON.parse(v);}catch(_){ return d; } };
+  const SETOPT = (k, v) => { try{ localStorage.setItem(STORE_PREFIX + 'opt_' + k, JSON.stringify(v)); }catch(_){ } };
+  const now = () => Date.now();
+  const dayMs = 24*60*60*1000;
+
+  /* --- Title bump --- */
+  try{
+    document.title = 'オセロ暗記トレーナー v8（SRS/タグ/並べ替え/自動次へ/ダーク）';
+    const h1 = document.querySelector('h1');
+    if(h1) h1.textContent = 'オセロ暗記トレーナー v8';
+  }catch(_){}
+
+  /* --- Theme toggle --- */
+  const themeModeInit = OPT('themeMode', 'auto'); // 'auto' | 'light' | 'dark'
+  function applyTheme(mode){
+    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    if(mode==='auto') document.body.classList.toggle('theme-dark', prefersDark);
+    else document.body.classList.toggle('theme-dark', mode==='dark');
+  }
+  applyTheme(themeModeInit);
+  if(window.matchMedia){
+    try{
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ()=>{
+        if(OPT('themeMode','auto')==='auto') applyTheme('auto');
+      });
+    }catch(_){}
+  }
+
+  /* --- Inject extra controls into 設定 card --- */
+  function el(tag, attrs={}, kids=[]){
+    const n = document.createElement(tag);
+    Object.entries(attrs).forEach(([k,v])=>{
+      if(k==='class') n.className = v;
+      else if(k==='text') n.textContent = v;
+      else if(k==='html') n.innerHTML = v;
+      else n.setAttribute(k, v);
+    });
+    kids.forEach(k => n.appendChild(k));
+    return n;
+  }
+
+  const settingsCard = (function(){
+    const cards = document.querySelectorAll('.dockGrid .card');
+    return cards && cards[0] ? cards[0] : null;
+  })();
+  if(settingsCard){
+    // theme
+    const themeField = el('div', {class:'field row wrap'});
+    themeField.appendChild(el('label', {text:'テーマ：'}));
+    const themeSel = el('select', {id:'themeModeSel'});
+    [['auto','自動（OS設定に追従）'],['light','ライト'],['dark','ダーク']].forEach(([v,txt])=>{
+      const o=el('option',{}); o.value=v; o.textContent=txt; if(v===themeModeInit) o.selected=true; themeSel.appendChild(o);
+    });
+    themeSel.addEventListener('change', ()=>{ SETOPT('themeMode', themeSel.value); applyTheme(themeSel.value); });
+    themeField.appendChild(themeSel);
+
+    // board size
+    const sizeField = el('div', {class:'field row wrap'});
+    sizeField.appendChild(el('label',{text:'盤サイズ：'}));
+    const sizeRange = el('input', {type:'range', min:'34', max:'72', step:'1', id:'cellSizeRange'});
+    const sizeLock = el('label', {class:'small'} , [el('input',{type:'checkbox', id:'lockCellSizeChk'}), document.createTextNode(' サイズ固定（ウィンドウに合わせない）')]);
+    const sizeInit = OPT('cellSize', null);
+    const lockInit = OPT('lockCell', false);
+    if(sizeInit) sizeRange.value = String(sizeInit);
+    sizeField.appendChild(sizeRange);
+    sizeField.appendChild(sizeLock);
+    settingsCard.appendChild(themeField);
+    settingsCard.appendChild(sizeField);
+
+    // auto-next + vibrate
+    const autoField = el('div', {class:'field row wrap'});
+    const autoChk = el('input', {type:'checkbox', id:'autoNextChk'});
+    autoChk.checked = !!OPT('autoNext', false);
+    const autoLbl = el('label', {class:'small'}, [autoChk, document.createTextNode(' 成功後に自動で次へ')]);
+    const secInput = el('input', {type:'number', id:'autoNextSec', min:'0.5', step:'0.1', placeholder:'秒'});
+    secInput.value = String(OPT('autoNextSec', 1.6));
+    autoField.appendChild(autoLbl);
+    autoField.appendChild(el('span',{class:'small', text:' 待ち時間（秒）：'}));
+    autoField.appendChild(secInput);
+
+    const vibrChk = el('input', {type:'checkbox', id:'vibrateChk'});
+    vibrChk.checked = !!OPT('vibrate', false);
+    const vibrLbl = el('label', {class:'small'}, [vibrChk, document.createTextNode(' ミス時に振動（対応端末）')]);
+    autoField.appendChild(el('span',{style:'width:10px;display:inline-block;'}));
+    autoField.appendChild(vibrLbl);
+
+    // hotkey help
+    const hkBtn = el('span', {class:'inline-help', text:'ショートカット一覧'});
+    hkBtn.addEventListener('click', ()=>{
+      alert([
+        'ショートカット：',
+        '  N：次の問題を出題',
+        '  R：今の問題をもう一度',
+        '  H：期待手ハイライトの切替',
+        '  M：マス内座標の切替',
+        '  S：効果音の切替',
+        '  B：両方を自分で打つの切替',
+        '  G：棋譜一覧を開く',
+        '  Esc：祝福画面／一覧を閉じる',
+        '  ← / →：確認モードで1手戻る／進む（既存機能）',
+      ].join('\n'));
+    });
+    autoField.appendChild(el('span',{style:'width:10px;display:inline-block;'}));
+    autoField.appendChild(hkBtn);
+
+    settingsCard.appendChild(autoField);
+
+    // SRS
+    const srsField = el('div', {class:'field row wrap'});
+    const srsChk = el('input', {type:'checkbox', id:'enableSrsChk'});
+    srsChk.checked = !!OPT('srsEnabled', true);
+    const srsLbl = el('label', {class:'small'}, [srsChk, document.createTextNode(' SRS（間隔反復）を有効化')]);
+    const srsBtn = el('button', {class:'ghost', id:'srsInitBtn', text:'SRS初期化（この小フォルダ）'});
+    const dueView = el('span', {class:'small', id:'srsDueView', text:'今日のSRS期限：—'});
+    srsField.appendChild(srsLbl);
+    srsField.appendChild(srsBtn);
+    srsField.appendChild(dueView);
+    settingsCard.appendChild(srsField);
+
+    // Insert SRS pick mode
+    try{
+      const already = Array.from(pickModeEl.options).some(o => o.value==='SRS_DUE');
+      if(!already){
+        const opt = document.createElement('option'); opt.value='SRS_DUE'; opt.textContent='SRS（期限順）';
+        pickModeEl.appendChild(opt);
+      }
+    }catch(_){}
+
+    // Persist handlers
+    sizeRange.addEventListener('input', ()=>{
+      const v = parseInt(sizeRange.value,10);
+      document.documentElement.style.setProperty('--cell', v + 'px');
+      SETOPT('cellSize', v);
+    });
+    const lockCb = sizeLock.querySelector('input');
+    lockCb.checked = !!lockInit;
+    lockCb.addEventListener('change', ()=>{
+      SETOPT('lockCell', !!lockCb.checked);
+      window.fitBoardToViewport(); // re-apply
+    });
+    autoChk.addEventListener('change', ()=> SETOPT('autoNext', !!autoChk.checked));
+    secInput.addEventListener('change', ()=> SETOPT('autoNextSec', parseFloat(secInput.value||'1.6')||1.6));
+    vibrChk.addEventListener('change', ()=> SETOPT('vibrate', !!vibrChk.checked));
+    srsChk.addEventListener('change', ()=> SETOPT('srsEnabled', !!srsChk.checked));
+    srsBtn.addEventListener('click', ()=>{
+      const pk = currentPath();
+      const arr = store.kifuByPath[pk] || [];
+      const t0 = Date.now();
+      arr.forEach(k => { ensureSrs(k, t0); });
+      saveStore(store);
+      updateSrsDueCount();
+      showToast('SRSフィールドを初期化しました');
+      try{ renderKifuList(); }catch(_){}
+    });
+
+    // expose elements for other functions
+    window._v8 = window._v8 || {};
+    _v8.ui = { themeSel, sizeRange, lockCb, autoChk, secInput, vibrChk, srsChk, dueView };
+  }
+
+  /* Respect size lock when viewport fits */
+  if(typeof window.fitBoardToViewport === 'function'){
+    const origFit = window.fitBoardToViewport;
+    window.fitBoardToViewport = function(){
+      if(OPT('lockCell', false) && OPT('cellSize', null)){
+        const v = OPT('cellSize', 56);
+        document.documentElement.style.setProperty('--cell', v + 'px');
+        return;
+      }
+      origFit();
+      // sync slider if present
+      try{
+        const v = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--cell'))||56;
+        if(_v8 && _v8.ui && _v8.ui.sizeRange) _v8.ui.sizeRange.value = String(v);
+      }catch(_){}
+    }
+    // initial apply
+    if(OPT('lockCell', false) && OPT('cellSize', null)){
+      document.documentElement.style.setProperty('--cell', OPT('cellSize',56) + 'px');
+    }
+  }
+
+  /* --- Count overlay on board --- */
+  (function(){
+    const elWrap = document.getElementById('boardWrap');
+    if(!elWrap) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'count-overlay';
+    overlay.id = 'countOverlay';
+    elWrap.appendChild(overlay);
+    function update(){
+      try{
+        let b=0,w=0;
+        for(let r=0;r<8;r++) for(let c=0;c<8;c++){
+          if(board[r][c]===1) b++; else if(board[r][c]===-1) w++;
+        }
+        overlay.textContent = `● ${b}　○ ${w}　| 手番：${currentPlayer===1?'黒':'白'}`;
+      }catch(_){}
+    }
+    if(typeof window.renderBoard === 'function'){
+      const orig = window.renderBoard;
+      window.renderBoard = function(){
+        orig(); update();
+      };
+      // initial
+      update();
+    }else{
+      update();
+    }
+  })();
+
+  /* --- Vibration on mistakes --- */
+  if(typeof window.playSound === 'function'){
+    const orig = window.playSound;
+    window.playSound = function(type){
+      orig(type);
+      if(type==='ng' && OPT('vibrate', false) && navigator.vibrate){
+        try{ navigator.vibrate(120); }catch(_){}
+      }
+    };
+  }
+
+  /* --- Auto-next on celebrate & SRS update --- */
+  const SRS_INTERVALS = [0,1,2,4,7,15]; // days by level (index=level)
+  function ensureSrs(k, baseNow){
+    if(!k) return;
+    if(typeof k.srsLevel!=='number' || !(k.srsLevel>=1)) k.srsLevel = 1;
+    if(typeof k.srsDue!=='number' || !isFinite(k.srsDue)) k.srsDue = baseNow || Date.now();
+  }
+  function srsUpdateOnFinish(k, mistakes){
+    if(!_v8 || !_v8.ui || !_v8.ui.srsChk || !_v8.ui.srsChk.checked) return;
+    ensureSrs(k);
+    if(mistakes===0){
+      k.srsLevel = Math.min(k.srsLevel + 1, 5);
+    }else{
+      k.srsLevel = 1;
+    }
+    const days = SRS_INTERVALS[k.srsLevel];
+    k.srsDue = Date.now() + days*dayMs;
+  }
+  function updateSrsDueCount(){
+    try{
+      const pk = currentPath();
+      const arr = getEnabledArrCurrent();
+      const due = (arr||[]).filter(k => (k.srsDue||0) <= Date.now()).length;
+      if(_v8 && _v8.ui && _v8.ui.dueView) _v8.ui.dueView.textContent = `今日のSRS期限：${due}件`;
+    }catch(_){}
+  }
+  window.updateSrsDueCount = updateSrsDueCount;
+
+  let autoNextTimer = null;
+  function cancelAutoNext(){
+    if(autoNextTimer){ clearInterval(autoNextTimer._interval); clearTimeout(autoNextTimer._timeout); autoNextTimer=null; }
+  }
+  if(typeof window.showCelebrate === 'function'){
+    const origShow = window.showCelebrate;
+    window.showCelebrate = function(total, mistakes){
+      origShow(total, mistakes);
+      // SRS
+      try{
+        const pk = currentPath();
+        const arr = store.kifuByPath[pk] || [];
+        const k = arr.find(x => x.id===currentKifuId);
+        if(k){ srsUpdateOnFinish(k, mistakes); saveStore(store); updateSrsDueCount(); }
+      }catch(_){}
+      // Auto-next
+      try{
+        cancelAutoNext();
+        const auto = OPT('autoNext', false);
+        const delay = Math.max(0.5, parseFloat(OPT('autoNextSec', 1.6)||1.6));
+        if(auto && mistakes===0){
+          let remain = delay;
+          const baseMsg = document.getElementById('celebrateMsg')?.textContent || '';
+          const msgEl = document.getElementById('celebrateMsg');
+          function tick(){
+            if(!msgEl) return;
+            msgEl.textContent = `${baseMsg}　（${remain.toFixed(1)}秒後に次へ）`;
+            remain = Math.max(0, remain - 0.1);
+          }
+          tick();
+          autoNextTimer = {
+            _interval: setInterval(tick, 100),
+            _timeout: setTimeout(()=>{ try{ document.getElementById('nextBtn').click(); }catch(_){} cancelAutoNext(); }, delay*1000)
+          };
+        }
+      }catch(_){}
+    };
+  }
+  // cancel on user actions
+  ['repeatBtn','nextBtn','resumeBtn','closeModalBtn','startBtn','resetBtn'].forEach(id=>{
+    const n = document.getElementById(id);
+    if(n) n.addEventListener('click', cancelAutoNext, {capture:true});
+  });
+  window.addEventListener('keydown', e=>{ if(e.key==='Escape') cancelAutoNext(); }, {capture:true});
+
+  // Update due count on init / path changes
+  if(typeof window.updateCountsAndPath === 'function'){
+    const orig = window.updateCountsAndPath;
+    window.updateCountsAndPath = function(){
+      orig(); updateSrsDueCount();
+    };
+  }else{
+    updateSrsDueCount();
+  }
+
+  /* --- Pick by SRS mode --- */
+  if(typeof window.pickKifu === 'function'){
+    const origPick = window.pickKifu;
+    window.pickKifu = function(){
+      const mode = pickModeEl.value;
+      if(mode==='SRS_DUE'){
+        const pk = currentPath();
+        const enabledArr = getEnabledArrCurrent();
+        const nowT = Date.now();
+        const due = enabledArr.filter(k => (k.srsDue||0) <= nowT);
+        if(due.length){
+          // earliest due, and if tie use most mistakes
+          due.sort((a,b)=> (a.srsDue||0)-(b.srsDue||0) || ((b.stats?.mistakes||0) - (a.stats?.mistakes||0)));
+          return due[0];
+        }else if(enabledArr.length){
+          enabledArr.sort((a,b)=> (a.srsDue||Infinity)-(b.srsDue||Infinity));
+          showToast('本日期限のSRSはありません。最も近いものを出題します');
+          return enabledArr[0];
+        }else{
+          alert('出題オンの棋譜がありません（SRS）');
+          return null;
+        }
+      }
+      return origPick();
+    };
+  }
+
+  /* --- Keyboard shortcuts --- */
+  window.addEventListener('keydown', (e)=>{
+    const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+    if(tag==='input' || tag==='textarea' || tag==='select') return;
+    if(e.key==='n' || e.key==='N'){ e.preventDefault(); try{ startTraining(); }catch(_){ } }
+    else if(e.key==='r' || e.key==='R'){ e.preventDefault(); try{ if(currentKifuId) startTrainingWithKifuId(currentKifuId); }catch(_){} }
+    else if(e.key==='h' || e.key==='H'){ e.preventDefault(); try{ toggleHintEl.checked = !toggleHintEl.checked; renderBoard(); }catch(_){} }
+    else if(e.key==='m' || e.key==='M'){ e.preventDefault(); try{ toggleMiniCoordEl.checked = !toggleMiniCoordEl.checked; renderBoard(); }catch(_){} }
+    else if(e.key==='s' || e.key==='S'){ e.preventDefault(); try{ toggleSoundEl.checked = !toggleSoundEl.checked; }catch(_){} }
+    else if(e.key==='b' || e.key==='B'){ e.preventDefault(); try{ toggleSelfBothEl.checked = !toggleSelfBothEl.checked; toggleSelfBothEl.dispatchEvent(new Event('change')); }catch(_){} }
+    else if(e.key==='g' || e.key==='G'){ e.preventDefault(); try{ openKifuModal(); }catch(_){} }
+    else if(e.key==='Escape'){ try{ hideCelebrate(); closeKifuModal(); }catch(_){} }
+  });
+
+  /* --- Extend kifu modal rows: Name + Tags + SRS info & DnD reorder --- */
+  function aggregateAllTagsForPath(pk){
+    const arr = store.kifuByPath[pk] || [];
+    const set = new Set();
+    arr.forEach(k => (k.tags||[]).forEach(t => set.add(String(t||'').trim())));
+    return Array.from(set).filter(Boolean).sort((a,b)=> a.localeCompare(b));
+  }
+  function enhanceKifuRows(){
+    const pk = currentPath();
+    const allTags = aggregateAllTagsForPath(pk);
+    const rows = document.querySelectorAll('#kifuList .klist-row');
+    rows.forEach(row => {
+      if(row.dataset.v8enh==='1') return;
+      row.dataset.v8enh = '1';
+      const id = row.dataset.id;
+      const arr = store.kifuByPath[pk] || [];
+      const k = arr.find(x => x.id===id);
+      if(!k) return;
+      if(!Array.isArray(k.tags)) k.tags = [];
+
+      const info = row.querySelector('.kinfo');
+      // Name field
+      const nameWrap = document.createElement('div');
+      nameWrap.className = 'kifu-wrap';
+      const nameLabel = document.createElement('div'); nameLabel.className='label'; nameLabel.textContent = '名前';
+      const nameInput = document.createElement('input'); nameInput.type='text'; nameInput.placeholder='問題名（任意）'; nameInput.value = k.name || '';
+      nameInput.addEventListener('change', ()=>{ k.name = nameInput.value.trim(); saveStore(store); });
+      const nameBtns = document.createElement('div'); nameBtns.className='kifu-btns';
+      const nameClr = document.createElement('button'); nameClr.className='ghost'; nameClr.textContent='クリア';
+      nameClr.addEventListener('click', ()=>{ nameInput.value=''; k.name=''; saveStore(store); showToast('名前をクリアしました'); });
+      nameBtns.appendChild(nameClr);
+      nameWrap.appendChild(nameLabel); nameWrap.appendChild(nameInput); nameWrap.appendChild(nameBtns);
+      info.appendChild(nameWrap);
+
+      // Tags field
+      const tagWrap = document.createElement('div'); tagWrap.className='kifu-wrap';
+      const tagLabel = document.createElement('div'); tagLabel.className='label'; tagLabel.textContent='タグ';
+      const chipBox = document.createElement('div'); chipBox.className='chips';
+      const tagInput = document.createElement('input'); tagInput.type='text'; tagInput.placeholder='タグを追加（Enterで確定／空白・カンマ区切り）';
+      const tagBtns = document.createElement('div'); tagBtns.className='kifu-btns';
+
+      const addBtn = document.createElement('button'); addBtn.className='ghost'; addBtn.textContent='追加';
+      function renderChips(){
+        chipBox.innerHTML='';
+        (k.tags||[]).forEach((t, idx)=>{
+          const chip = document.createElement('span'); chip.className='chip';
+          const x = document.createElement('span'); x.className='x'; x.textContent='×';
+          x.addEventListener('click', ()=>{ k.tags.splice(idx,1); saveStore(store); renderChips(); });
+          chip.appendChild(document.createTextNode('#'+t));
+          chip.appendChild(x);
+          chipBox.appendChild(chip);
+        });
+      }
+      function addTagsFromInput(){
+        const raw = tagInput.value||'';
+        const parts = raw.split(/[,\s]+/).map(s=>s.trim()).filter(Boolean);
+        if(!parts.length) return;
+        const set = new Set(k.tags||[]);
+        parts.forEach(p => set.add(p));
+        k.tags = Array.from(set);
+        tagInput.value='';
+        saveStore(store);
+        renderChips();
+      }
+      addBtn.addEventListener('click', addTagsFromInput);
+      tagInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); addTagsFromInput(); } });
+      const clearBtn = document.createElement('button'); clearBtn.className='ghost'; clearBtn.textContent='全削除';
+      clearBtn.addEventListener('click', ()=>{ k.tags=[]; saveStore(store); renderChips(); });
+
+      tagBtns.appendChild(addBtn);
+      tagBtns.appendChild(clearBtn);
+      tagWrap.appendChild(tagLabel);
+      const rightCol = document.createElement('div');
+      const sugg = document.createElement('div'); sugg.className='small muted'; 
+      if(allTags.length) sugg.textContent = '候補：' + allTags.map(t=>'#'+t).join(' ');
+      rightCol.appendChild(chipBox);
+      rightCol.appendChild(tagInput);
+      rightCol.appendChild(sugg);
+      tagWrap.appendChild(rightCol);
+      tagWrap.appendChild(tagBtns);
+      info.appendChild(tagWrap);
+
+      // SRS info (small)
+      const srsInfo = document.createElement('div'); srsInfo.className='small muted';
+      function refreshSrsInfo(){
+        const due = (k.srsDue? new Date(k.srsDue): null);
+        const dueStr = due ? `${due.getFullYear()}-${String(due.getMonth()+1).padStart(2,'0')}-${String(due.getDate()).padStart(2,'0')}` : '—';
+        srsInfo.textContent = `SRS：L${k.srsLevel||1} ／ next=${dueStr}`;
+        if(due && k.srsDue <= Date.now()){ srsInfo.style.color = '#b00020'; } else { srsInfo.style.color = ''; }
+      }
+      refreshSrsInfo();
+      info.appendChild(srsInfo);
+
+      // DnD reorder (only when sort=INDEX & filters off)
+      row.draggable = true;
+      row.addEventListener('dragstart', (e)=>{
+        row.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain', id);
+      });
+      row.addEventListener('dragend', ()=>{
+        row.classList.remove('dragging'); document.querySelectorAll('#kifuList .klist-row').forEach(r=>r.classList.remove('drop-before','drop-after'));
+      });
+      row.addEventListener('dragover', (e)=>{
+        const condOK = document.getElementById('sortBy')?.value==='INDEX'
+                    && document.getElementById('sortDir')?.value==='ASC'
+                    && (document.getElementById('searchInput')?.value||'').trim()===''
+                    && (!window._v8TagFilter || window._v8TagFilter.words.length===0);
+        if(!condOK) return;
+        e.preventDefault();
+        const rect = row.getBoundingClientRect();
+        const after = (e.clientY - rect.top) > (rect.height/2);
+        row.classList.toggle('drop-after', after);
+        row.classList.toggle('drop-before', !after);
+      });
+      row.addEventListener('drop', (e)=>{
+        const condOK = document.getElementById('sortBy')?.value==='INDEX'
+                    && document.getElementById('sortDir')?.value==='ASC'
+                    && (document.getElementById('searchInput')?.value||'').trim()===''
+                    && (!window._v8TagFilter || window._v8TagFilter.words.length===0);
+        if(!condOK) return;
+        const dragId = e.dataTransfer.getData('text/plain');
+        const targetId = id;
+        const after = row.classList.contains('drop-after');
+        commitKifuReorder(dragId, targetId, after);
+      });
     });
   }
+  function commitKifuReorder(dragId, targetId, placeAfter){
+    const pk = currentPath();
+    const baseArr = store.kifuByPath[pk] || [];
+    const from = baseArr.findIndex(k=>k.id===dragId);
+    const toBase = baseArr.findIndex(k=>k.id===targetId);
+    if(from<0 || toBase<0) return;
+    let to = toBase + (placeAfter?1:0);
+    if(from < to) to--;
+    if(from === to) return;
+    const [item] = baseArr.splice(from, 1);
+    baseArr.splice(to, 0, item);
+    baseArr.forEach((k, i)=> k._idx = i);
+    saveStore(store);
+    try{ renderKifuList(); }catch(_){}
+    showToast('表示順（追加順）を並べ替えました');
+  }
+
+  // patch renderKifuList to enhance after original
+  if(typeof window.renderKifuList === 'function'){
+    const orig = window.renderKifuList;
+    window.renderKifuList = function(){
+      orig();
+      try{ enhanceKifuRows(); }catch(_){}
+    };
+  }
+
+  /* --- Tag filter UI in modal header --- */
+  (function(){
+    const hdr = document.querySelector('#kifuModal .klist-controls');
+    if(!hdr) return;
+    const wrap = document.createElement('span');
+    wrap.style.display = 'inline-flex'; wrap.style.alignItems='center'; wrap.style.gap='6px'; wrap.style.flexWrap='wrap';
+    wrap.style.marginLeft = '8px';
+    const lbl = document.createElement('label'); lbl.textContent='タグ：';
+    const input = document.createElement('input'); input.id='tagFilterInput'; input.placeholder='例) 攻め 定石'; input.style.minWidth='160px';
+    const orWrap = document.createElement('label'); orWrap.className='small';
+    const orChk = document.createElement('input'); orChk.type='checkbox'; orChk.id='tagOrMode';
+    orWrap.appendChild(orChk); orWrap.appendChild(document.createTextNode(' ORで絞り込み'));
+    const clear = document.createElement('button'); clear.className='ghost'; clear.textContent='タグ解除';
+
+    hdr.appendChild(lbl); hdr.appendChild(input); hdr.appendChild(orWrap); hdr.appendChild(clear);
+
+    const st = { words: [], or: false };
+    window._v8TagFilter = st;
+
+    function apply(){
+      st.words = (input.value||'').split(/\s+/).map(s=>s.trim().toLowerCase()).filter(Boolean);
+      st.or = !!orChk.checked;
+      renderKifuList();
+    }
+    input.addEventListener('input', apply);
+    orChk.addEventListener('change', apply);
+    clear.addEventListener('click', ()=>{ input.value=''; orChk.checked=false; apply(); });
+
+    // override getSortedArray to append tag filter
+    if(typeof window.getSortedArray === 'function'){
+      const orig = window.getSortedArray;
+      window.getSortedArray = function(pk){
+        let arr = orig(pk);
+        try{
+          const words = st.words;
+          if(words.length){
+            arr = arr.filter(k => {
+              const tags = (k.tags||[]).map(t => String(t||'').toLowerCase());
+              if(!tags.length) return false;
+              if(st.or) return words.some(w => tags.includes(w));
+              return words.every(w => tags.includes(w));
+            });
+          }
+        }catch(_){}
+        return arr;
+      };
+    }
+  })();
+
+  /* --- Allow editing Big folder default color in modal --- */
+  (function(){
+    const row = document.getElementById('renameBigRow');
+    if(!row) return;
+    const g = document.createElement('div');
+    g.className = 'row wrap';
+    g.style.marginTop = '6px';
+    const metaLbl = document.createElement('label'); metaLbl.textContent = '持色（既定）：';
+    g.appendChild(metaLbl);
+    [['','指定なし'],['BLACK','黒'],['WHITE','白']].forEach(([val,txt])=>{
+      const lab = document.createElement('label'); lab.className='small';
+      const r = document.createElement('input'); r.type='radio'; r.name='editBigColor'; r.value=val;
+      lab.appendChild(r); lab.appendChild(document.createTextNode(' '+txt)); g.appendChild(lab);
+    });
+    row.appendChild(g);
+
+    function sync(){
+      const big = currentBig(); if(!big) return;
+      const meta = (store.bigFolders||[]).find(b=>b.name===big);
+      const v = meta && meta.defaultColor ? meta.defaultColor : '';
+      const radios = row.querySelectorAll('input[name="editBigColor"]');
+      radios.forEach(r => r.checked = (r.value===v));
+    }
+    function save(){
+      const big = currentBig(); if(!big) return;
+      const meta = (store.bigFolders||[]).find(b=>b.name===big);
+      if(!meta) return;
+      const r = row.querySelector('input[name="editBigColor"]:checked');
+      meta.defaultColor = r ? (r.value||'') : '';
+      saveStore(store);
+      showToast('持色（既定）を更新しました');
+      refreshSmallSelect();
+    }
+    row.addEventListener('change', (e)=>{
+      const t = e.target;
+      if(t && t.name==='editBigColor'){ save(); }
+    });
+    // sync on open modal
+    if(typeof window.openKifuModal === 'function'){
+      const orig = window.openKifuModal;
+      window.openKifuModal = function(){
+        orig();
+        sync();
+      };
+    }
+  })();
+
+})(); // end v8 addon IIFE
+
 </script>
 
-</body>
-</html>
+<script>
+/* ===== v9 Addons by ChatGPT (2025-10-19) ===== */
+(function(){
+  // local opt store helpers (independent from v8 scope)
+  const OPT = (k, d) => { try{ const v = localStorage.getItem(STORE_PREFIX + 'opt9_' + k); return v==null?d:JSON.parse(v);}catch(_){ return d; } };
+  const SETOPT = (k, v) => { try{ localStorage.setItem(STORE_PREFIX + 'opt9_' + k, JSON.stringify(v)); }catch(_){ } };
 
+  // --- Bump title to v9
+  try{
+    document.title = 'オセロ暗記トレーナー v9（ヒートマップ/タイム/対称/範囲自動/PNG/キュー/部分エクスポート）';
+    const h1 = document.querySelector('h1');
+    if(h1) h1.textContent = 'オセロ暗記トレーナー v9';
+  }catch(_){}
+
+  // --- Small DOM helpers
+  function el(tag, attrs={}, kids=[]){
+    const n=document.createElement(tag);
+    Object.entries(attrs).forEach(([k,v])=>{
+      if(k==='class') n.className=v;
+      else if(k==='text') n.textContent=v;
+      else if(k==='html') n.innerHTML=v;
+      else n.setAttribute(k,v);
+    });
+    kids.forEach(k => n.appendChild(k));
+    return n;
+  }
+
+  // ---------- UI injections ----------
+  // ② 設定カードを取得（dockGridの最初のcard）
+  const settingsCard = (function(){
+    const cards = document.querySelectorAll('.dockGrid .card');
+    return cards && cards[0] ? cards[0] : null;
+  })();
+
+  // Heatmap toggle + Symmetry + Random Range
+  if(settingsCard){
+    // Heatmap
+    const heatField = el('div', {class:'field row wrap'});
+    const heatChk = el('input', {type:'checkbox', id:'heatChk'});
+    heatChk.checked = !!OPT('heatOn', false);
+    const heatLbl = el('label', {class:'small'}, [heatChk, document.createTextNode(' 誤答ヒートマップ（現棋譜）を表示')]);
+    heatField.appendChild(heatLbl);
+
+    // Symmetry
+    const symSel = el('select', {id:'symmetrySel'});
+    [['NONE','対称変換なし'],['HFLIP','左右反転'],['VFLIP','上下反転'],['ROT180','回転180°'],['RANDOM','ランダム']].forEach(([v,t])=>{
+      const o=el('option'); o.value=v; o.textContent=t;
+      if(v===OPT('symMode','NONE')) o.selected=true;
+      symSel.appendChild(o);
+    });
+    const symLbl = el('label', {text:' 対称変換：'});
+    heatField.appendChild(symLbl);
+    heatField.appendChild(symSel);
+
+    // Random range
+    const rngChk = el('input', {type:'checkbox', id:'rangeAutoChk'});
+    rngChk.checked = !!OPT('rangeAuto', false);
+    const rngLbl = el('label', {class:'small'}, [rngChk, document.createTextNode(' 範囲を毎回ランダム化')]);
+    heatField.appendChild(el('span',{style:'width:10px;display:inline-block;'}));
+    heatField.appendChild(rngLbl);
+
+    const minIn = el('input', {type:'number', id:'rangeMinLen', min:'1', max:'60', step:'1', placeholder:'最小長'});
+    const maxIn = el('input', {type:'number', id:'rangeMaxLen', min:'1', max:'60', step:'1', placeholder:'最大長'});
+    minIn.value = String(OPT('rangeMin', 8));
+    maxIn.value = String(OPT('rangeMax', 30));
+    heatField.appendChild(el('span',{class:'small', text:' 長さ：'}));
+    heatField.appendChild(minIn);
+    heatField.appendChild(el('span',{class:'small', text:' 〜 '}));
+    heatField.appendChild(maxIn);
+
+    settingsCard.appendChild(heatField);
+
+    // Persist
+    heatChk.addEventListener('change', ()=>{ SETOPT('heatOn', !!heatChk.checked); updateHeatOverlay(); });
+    symSel.addEventListener('change', ()=> SETOPT('symMode', symSel.value));
+    rngChk.addEventListener('change', ()=> SETOPT('rangeAuto', !!rngChk.checked));
+    minIn.addEventListener('change', ()=> SETOPT('rangeMin', Math.max(1, Math.min(60, parseInt(minIn.value||'8',10)))));
+    maxIn.addEventListener('change', ()=> SETOPT('rangeMax', Math.max(1, Math.min(60, parseInt(maxIn.value||'30',10)))));
+  }
+
+  // ③ キューカードに機能追加
+  (function(){
+    const cards = document.querySelectorAll('.dockGrid .card');
+    const queueCard = cards && cards[1] ? cards[1] : null;
+    if(!queueCard) return;
+    const field = queueCard.querySelector('.field');
+    if(!field) return;
+
+    const row = el('div', {class:'row wrap'});
+    const dedupBtn = el('button', {class:'ghost', id:'queueDedupBtn', text:'キュー重複を削除'});
+    const shuffleBtn = el('button', {class:'ghost', id:'queueShuffleBtn', text:'キューをシャッフル'});
+    row.appendChild(dedupBtn);
+    row.appendChild(shuffleBtn);
+    field.parentNode.insertBefore(row, field.nextSibling);
+
+    dedupBtn.addEventListener('click', ()=>{
+      try{
+        const pk = currentPath();
+        const q = getQueueByPath(pk).slice();
+        const seen = new Set(); const out = [];
+        q.forEach(id=>{ if(!seen.has(id)){ seen.add(id); out.push(id); } });
+        store.queueByPath[pk] = out; saveStore(store); updateQueueView();
+        showToast('キューの重複を削除しました');
+      }catch(e){ alert('処理中にエラーが発生しました'); }
+    });
+    shuffleBtn.addEventListener('click', ()=>{
+      try{
+        const pk = currentPath();
+        const q = getQueueByPath(pk).slice();
+        for(let i=q.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [q[i],q[j]]=[q[j],q[i]]; }
+        store.queueByPath[pk] = q; saveStore(store); updateQueueView();
+        showToast('キューをシャッフルしました');
+      }catch(e){ alert('処理中にエラーが発生しました'); }
+    });
+  })();
+
+  // ① 入出力カードに「この小フォルダのみエクスポート」を追加
+  (function(){
+    const exportBtn = document.getElementById('exportBtn');
+    if(!exportBtn) return;
+    const wrapField = exportBtn.closest('.field.row.wrap') || exportBtn.parentNode;
+    const btn = el('button', {class:'ghost', id:'exportFolderBtn', text:'エクスポート（この小フォルダのみ）'});
+    wrapField.insertBefore(btn, exportBtn.nextSibling);
+    btn.addEventListener('click', ()=>{
+      const pk = currentPath();
+      const payload = {
+        type: 'reversi_trainer_folder_export_v1',
+        exportedAt: new Date().toISOString(),
+        path: pk,
+        big: currentBig(),
+        small: currentSmall(),
+        kifu: (store.kifuByPath[pk]||[]),
+        queue: (store.queueByPath[pk]||[])
+      };
+      const blob = new Blob([JSON.stringify(payload,null,2)], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href=url; a.download = (pk.replaceAll('/','__') || 'folder') + '_export.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    });
+  })();
+
+  // ---------- Heatmap & mistake logging ----------
+  function getCurrentKifuObj(){
+    const pk = currentPath();
+    const arr = store.kifuByPath[pk] || [];
+    return arr.find(x => x.id===currentKifuId) || null;
+  }
+  function ensureHeatLayer(){
+    const cells = document.querySelectorAll('#board .cell');
+    cells.forEach(cell => {
+      if(!cell.querySelector('.heat')){
+        const h = document.createElement('div'); h.className = 'heat';
+        const t = document.createElement('div'); t.className = 'cnt';
+        h.appendChild(t);
+        cell.appendChild(h);
+      }
+    });
+  }
+  function updateHeatOverlay(){
+    try{
+      ensureHeatLayer();
+      const wrap = document.getElementById('boardWrap');
+      const on = !!OPT('heatOn', false);
+      if(wrap) wrap.classList.toggle('heat-on', on);
+      if(!on) return;
+      const k = getCurrentKifuObj();
+      const map = (k && k.mistakeCounts) || {};
+      let maxv = 0;
+      Object.values(map).forEach(v => { if(v>maxv) maxv = v; });
+      const cells = document.querySelectorAll('#board .cell');
+      cells.forEach(cell => {
+        const coord = cell.getAttribute('data-coord');
+        const v = map[coord] || 0;
+        const heat = cell.querySelector('.heat');
+        if(!heat) return;
+        const t = heat.querySelector('.cnt');
+        if(v<=0){ heat.style.background = 'transparent'; t.textContent=''; return; }
+        const alpha = Math.min(0.15 + 0.35*(v/(maxv||1)), 0.5);
+        heat.style.background = 'rgba(220, 32, 32, ' + alpha.toFixed(3) + ')';
+        t.textContent = String(v);
+      });
+    }catch(_){}
+  }
+  // hook renderBoard to update overlay
+  if(typeof window.renderBoard === 'function'){
+    const orig = window.renderBoard;
+    window.renderBoard = function(){
+      orig();
+      updateHeatOverlay();
+    };
+  }
+
+  // hook flashX to log mistakes per coordinate
+  if(typeof window.flashX === 'function'){
+    const origFX = window.flashX;
+    window.flashX = function(cell){
+      try{
+        if(training && currentKifuId){
+          const coord = cell && cell.getAttribute ? cell.getAttribute('data-coord') : null;
+          const k = getCurrentKifuObj();
+          if(coord && k){
+            k.mistakeCounts = k.mistakeCounts || {};
+            k.mistakeCounts[coord] = (k.mistakeCounts[coord]||0) + 1;
+            saveStore(store);
+          }
+        }
+      }catch(_){}
+      origFX(cell);
+    };
+  }
+
+  // ---------- Symmetry transform & Random range & Timer ----------
+  function transformCoord(coord, mode){
+    const m = String(coord).trim().toUpperCase().match(/^([A-H])([1-8])$/);
+    if(!m) return coord;
+    const cols = 'ABCDEFGH';
+    let c = cols.indexOf(m[1]);
+    let r = parseInt(m[2],10)-1;
+    if(mode==='HFLIP' || mode==='ROT180'){ c = 7 - c; }
+    if(mode==='VFLIP' || mode==='ROT180'){ r = 7 - r; }
+    return cols[c] + String(r+1);
+  }
+  function transformMoves(moves, mode){
+    if(!mode || mode==='NONE') return moves.slice();
+    return (moves||[]).map(t => (t==='P' || t==='PASS') ? t : transformCoord(t, mode));
+  }
+  function pickSymMode(){
+    const m = OPT('symMode','NONE');
+    if(m==='RANDOM'){
+      const cand = ['HFLIP','VFLIP','ROT180'];
+      return cand[Math.floor(Math.random()*cand.length)];
+    }
+    return m;
+  }
+  window._v9 = window._v9 || {};
+  _v9.timerStart = 0;
+
+  if(typeof window.startTrainingCore === 'function'){
+    const orig = window.startTrainingCore;
+    window.startTrainingCore = function(picked){
+      try{
+        // range auto
+        if(OPT('rangeAuto', false)){
+          const total = (picked.moves||[]).length;
+          const minL = Math.max(1, Math.min(total, OPT('rangeMin', 8)));
+          const maxL = Math.max(minL, Math.min(total, OPT('rangeMax', 30)));
+          const len = Math.floor(Math.random()*(maxL - minL + 1)) + minL;
+          const start = Math.floor(Math.random()*(total - len + 1)) + 1; // 1-based
+          const end = start + len - 1;
+          const sIn = document.getElementById('startIndexInput');
+          const eIn = document.getElementById('endIndexInput');
+          if(sIn) sIn.value = String(start);
+          if(eIn) eIn.value = String(end);
+        }
+        // symmetry
+        const mode = pickSymMode();
+        if(mode && mode!=='NONE'){
+          const clone = Object.assign({}, picked);
+          clone.moves = transformMoves(picked.moves, mode);
+          picked = clone;
+          setTimeout(()=>{ try{ setStatus(`対称変換：${({HFLIP:'左右反転',VFLIP:'上下反転',ROT180:'回転180°'})[mode]||mode}`); }catch(_){ } }, 10);
+        }
+      }catch(_){}
+      _v9.timerStart = Date.now();
+      return orig(picked);
+    };
+  }
+
+  // hook showCelebrate to append time info and persist best/avg
+  if(typeof window.showCelebrate === 'function'){
+    const origSC = window.showCelebrate;
+    window.showCelebrate = function(total, mistakes){
+      origSC(total, mistakes);
+      try{
+        if(!_v9.timerStart) return;
+        const ms = Math.max(0, Date.now() - _v9.timerStart);
+        const sec = (ms/1000).toFixed(2);
+        const infoBox = document.getElementById('resultInfo');
+        if(infoBox){
+          const f = document.createElement('div');
+          f.className = 'field';
+          const lab = document.createElement('label'); lab.className='small'; lab.textContent = '経過時間';
+          const p = document.createElement('div'); p.className='small muted'; p.textContent = `${sec} 秒`;
+          f.appendChild(lab); f.appendChild(p);
+          infoBox.appendChild(f);
+        }
+        // persist per-kifu time stats
+        const pk = currentPath();
+        const arr = store.kifuByPath[pk] || [];
+        const k = arr.find(x=>x.id===currentKifuId);
+        if(k){
+          k.stats = k.stats || { attempts:0, solved:0, mistakes:0 };
+          k.stats.time = k.stats.time || { bestMs:null, totalMs:0, count:0, lastMs:0, avgMs:0 };
+          k.stats.time.lastMs = ms;
+          if(mistakes===0){
+            k.stats.time.count += 1;
+            k.stats.time.totalMs += ms;
+            if(k.stats.time.bestMs==null || ms < k.stats.time.bestMs) k.stats.time.bestMs = ms;
+            k.stats.time.avgMs = k.stats.time.totalMs / Math.max(1, k.stats.time.count);
+          }
+          saveStore(store);
+        }
+      }catch(_){}
+    };
+  }
+
+  // augment modal rows with stats chips (attempts/solved/mistakes/best time)
+  function augmentStatsInModal(){
+    try{
+      const pk = currentPath();
+      const arr = store.kifuByPath[pk] || [];
+      document.querySelectorAll('#kifuList .klist-row').forEach(row => {
+        if(row.dataset.v9stats==='1') return;
+        const id = row.getAttribute('data-id');
+        const k = arr.find(x=>x.id===id);
+        if(!k) return;
+        const info = row.querySelector('.kinfo');
+        if(!info) return;
+        const line = document.createElement('div');
+        line.className = 'chips';
+        const ch = (txt)=>{ const c=document.createElement('span'); c.className='chip'; c.textContent=txt; return c; };
+        const t = k.stats||{}; const tm = (t.time||{});
+        line.appendChild(ch(`▶ ${t.attempts||0}`));
+        line.appendChild(ch(`✓ ${t.solved||0}`));
+        line.appendChild(ch(`× ${t.mistakes||0}`));
+        if(tm.bestMs!=null) line.appendChild(ch(`⏱ ${(tm.bestMs/1000).toFixed(2)}s`));
+        info.appendChild(line);
+        row.dataset.v9stats = '1';
+      });
+    }catch(_){}
+  }
+  if(typeof window.renderKifuList === 'function'){
+    const orig = window.renderKifuList;
+    window.renderKifuList = function(){
+      orig();
+      try{ augmentStatsInModal(); }catch(_){}
+    };
+  }
+
+  // ---------- PNG download of board ----------
+  (function(){
+    const boardCard = document.querySelector('.rightDock .card');
+    if(!boardCard) return;
+    const bar = boardCard.querySelector('.row-just');
+    if(!bar) return;
+    const btn = el('button', {class:'ghost', id:'pngBtn', text:'盤面をPNG保存'});
+    bar.appendChild(btn);
+    btn.addEventListener('click', ()=>{
+      try{
+        const cell = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--cell')) || 56;
+        const gap = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--gap')) || 2;
+        const N = 8;
+        const size = N*cell + (N-1)*gap;
+        const cvs = document.createElement('canvas');
+        cvs.width = cvs.height = size;
+        const ctx = cvs.getContext('2d');
+        // board
+        ctx.fillStyle = '#0a5a2a'; ctx.fillRect(0,0,size,size);
+        for(let r=0;r<N;r++){
+          for(let c=0;c<N;c++){
+            const x = c*(cell+gap);
+            const y = r*(cell+gap);
+            ctx.fillStyle = '#1e7a3b';
+            const rad = 6;
+            // rounded rect
+            const w=cell,h=cell;
+            ctx.beginPath();
+            ctx.moveTo(x+rad, y);
+            ctx.arcTo(x+w, y, x+w, y+h, rad);
+            ctx.arcTo(x+w, y+h, x, y+h, rad);
+            ctx.arcTo(x, y+h, x, y, rad);
+            ctx.arcTo(x, y, x+w, y, rad);
+            ctx.closePath();
+            ctx.fill();
+          }
+        }
+        // discs from 'board' array
+        for(let r=0;r<N;r++){
+          for(let c=0;c<N;c++){
+            const v = (window.board && board[r]) ? board[r][c] : 0;
+            if(!v) continue;
+            const x = c*(cell+gap) + cell/2;
+            const y = r*(cell+gap) + cell/2;
+            const radius = cell*0.41;
+            ctx.beginPath(); ctx.arc(x,y,radius,0,Math.PI*2);
+            ctx.fillStyle = (v===1) ? '#111' : '#eee';
+            ctx.fill();
+            // simple highlight
+            ctx.globalAlpha = 0.15;
+            ctx.beginPath(); ctx.arc(x - radius*0.35, y - radius*0.35, radius*0.65, 0, Math.PI*2);
+            ctx.fillStyle = '#fff'; ctx.fill();
+            ctx.globalAlpha = 1;
+          }
+        }
+        const url = cvs.toDataURL('image/png');
+        const a = document.createElement('a'); a.href=url;
+        const dt = new Date();
+        const y = dt.getFullYear(), m = String(dt.getMonth()+1).padStart(2,'0'), d=String(dt.getDate()).padStart(2,'0');
+        const hh = String(dt.getHours()).padStart(2,'0'), mm=String(dt.getMinutes()).padStart(2,'0'), ss=String(dt.getSeconds()).padStart(2,'0');
+        a.download = `reversi_board_${y}${m}${d}_${hh}${mm}${ss}.png`;
+        document.body.appendChild(a); a.click(); a.remove();
+      }catch(e){ alert('PNGの作成に失敗しました'); }
+    });
+  })();
+
+  // ensure heat overlay present once DOM is ready
+  document.addEventListener('DOMContentLoaded', ()=>{ setTimeout(updateHeatOverlay, 50); });
+
+})(); // end v9
+</script>
+
+
+<!-- ===== v10 Addons by ChatGPT (2025-10-19) ===== -->
+<style>
+/* v10: timer overlay, recorder overlay, dropzone */
+.timer-overlay{
+  position:absolute; left:10px; top:10px; z-index:7;
+  background: rgba(0,0,0,0.55); color:#fff; padding:4px 8px; border-radius:8px;
+  font-size:.90rem; font-variant-numeric: tabular-nums; pointer-events:none;
+}
+.rec-layer{
+  position:absolute; inset:0; background: rgba(0,0,0,.45);
+  display:none; align-items:center; justify-content:center; z-index:20;
+}
+.rec-layer .panel{
+  background: rgba(255,255,255,0.98); color:#111;
+  width:min(600px,92vw); max-height:86vh; overflow:auto;
+  border-radius:16px; padding:16px; box-shadow:0 10px 40px rgba(0,0,0,.35);
+}
+body.theme-dark .rec-layer .panel{ background: rgba(21,26,31,0.98); color:#e7ebf3; }
+.rec-layer .panel h3{ margin:0 0 8px; font-size:1.12rem; }
+.rec-layer .row{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.rec-layer .field{ display:grid; gap:6px; margin:8px 0; }
+.rec-layer input[type="text"], .rec-layer textarea, .rec-layer input[type="number"]{
+  width:100%; font-size:.95rem; padding:6px 8px; border:1px solid #d6d6d6; border-radius:6px;
+  background: var(--card-bg); color: var(--fg);
+}
+.rec-layer .actions{ display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
+.dropzone{
+  border:2px dashed #b9c2ff; border-radius:12px; padding:10px; text-align:center;
+  background:#fbfcff; color:#174199; font-size:.9rem;
+}
+.dropzone.drag{ background:#eef3ff; }
+.small.mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Roboto Mono", monospace; }
+</style>
+<script>
+(function(){
+  const OPT = (k, d) => { try{ const v = localStorage.getItem(STORE_PREFIX + 'opt10_' + k); return v==null?d:JSON.parse(v);}catch(_){ return d; } };
+  const SETOPT = (k, v) => { try{ localStorage.setItem(STORE_PREFIX + 'opt10_' + k, JSON.stringify(v)); }catch(_){ } };
+
+  // ---- Version bump ----
+  try{
+    document.title = 'オセロ暗記トレーナー v10（録画入力/タイムアタック/対称90°/タグ一括/Drag&Drop/全体SRS/CSVログ/合法手数）';
+    const h1 = document.querySelector('h1');
+    if(h1) h1.textContent = 'オセロ暗記トレーナー v10';
+  }catch(_){}
+
+  // ---- Topbar: global SRS due count ----
+  (function(){
+    try{
+      const topbar = document.querySelector('.topbar');
+      if(topbar && !document.getElementById('globalSrsDue')){
+        const span = document.createElement('span');
+        span.className = 'stat';
+        span.innerHTML = 'SRS期限（全体）：<b id="globalSrsDue">0</b>';
+        topbar.appendChild(span);
+      }
+      function compute(){
+        try{
+          const now = Date.now();
+          let cnt = 0;
+          const all = store && store.kifuByPath ? store.kifuByPath : {};
+          Object.values(all).forEach(arr=>{
+            (arr||[]).forEach(k=>{
+              if(k && k.enabled!==false && typeof k.srsDue==='number' && k.srsDue <= now) cnt++;
+            });
+          });
+          const el = document.getElementById('globalSrsDue'); if(el) el.textContent = String(cnt);
+        }catch(_){}
+      }
+      // wrap saveStore to recompute
+      if(typeof window.saveStore === 'function' && !window._v10_save_wrapped){
+        const orig = window.saveStore;
+        window.saveStore = function(obj){ try{ orig(obj); }finally{ try{ compute(); }catch(_){} } };
+        window._v10_save_wrapped = true;
+      }
+      compute();
+      // also recompute on path updates
+      if(typeof window.updateCountsAndPath === 'function'){
+        const origU = window.updateCountsAndPath;
+        window.updateCountsAndPath = function(){ origU(); compute(); };
+      }
+      window._v10_computeGlobalSrsDue = compute;
+    }catch(_){}
+  })();
+
+  // ---- Enhance count overlay: add legal-move count & empty ----
+  (function(){
+    function updatePlus(){
+      try{
+        let b=0,w=0,empty=0;
+        for(let r=0;r<8;r++) for(let c=0;c<8;c++){
+          if(board[r][c]===1) b++; else if(board[r][c]===-1) w++; else empty++;
+        }
+        const LM = legalMoves(board, currentPlayer);
+        const el = document.getElementById('countOverlay');
+        if(el){
+          el.textContent = `● ${b}　○ ${w}　| 手番：${currentPlayer===1?'黒':'白'}　| 合法手：${LM.length}　| 空：${empty}`;
+        }
+      }catch(_){}
+    }
+    if(typeof window.renderBoard === 'function'){
+      const orig = window.renderBoard;
+      window.renderBoard = function(){ orig(); updatePlus(); };
+    }else{
+      updatePlus();
+    }
+  })();
+
+  // ---- Settings card reference ----
+  const settingsCard = (function(){
+    const cards = document.querySelectorAll('.dockGrid .card');
+    return cards && cards[0] ? cards[0] : null;
+  })();
+
+  // ---- Time Attack countdown ----
+  const timer = { id: null, end: 0, overlay:null };
+  (function(){
+    const wrap = document.getElementById('boardWrap');
+    if(wrap && !document.getElementById('timerOverlay')){
+      const o = document.createElement('div'); o.id='timerOverlay'; o.className='timer-overlay'; o.style.display='none';
+      wrap.appendChild(o); timer.overlay = o;
+    }
+    if(settingsCard){
+      const field = document.createElement('div'); field.className='field row wrap';
+      const chk = document.createElement('input'); chk.type='checkbox'; chk.id='countdownEnable';
+      chk.checked = !!OPT('countdownEnable', false);
+      const lbl = document.createElement('label'); lbl.className='small';
+      lbl.appendChild(chk); lbl.appendChild(document.createTextNode(' タイムアタック（カウントダウン）'));
+      const sec = document.createElement('input'); sec.type='number'; sec.id='countdownSecIn'; sec.min='1'; sec.step='1';
+      sec.placeholder = '秒'; sec.value = String(OPT('countdownSec', 30));
+      field.appendChild(lbl);
+      field.appendChild(document.createTextNode(' 秒：'));
+      field.appendChild(sec);
+      settingsCard.appendChild(field);
+      chk.addEventListener('change', ()=> SETOPT('countdownEnable', !!chk.checked));
+      sec.addEventListener('change', ()=> SETOPT('countdownSec', Math.max(1, parseInt(sec.value||'30',10))));
+    }
+    function stop(){
+      if(timer.id){ clearInterval(timer.id); timer.id=null; }
+      if(timer.overlay){ timer.overlay.style.display='none'; }
+    }
+    function start(sec){
+      stop();
+      if(!timer.overlay) return;
+      timer.end = Date.now() + Math.max(1, sec)*1000;
+      timer.overlay.style.display='block';
+      function tick(){
+        const remain = Math.max(0, timer.end - Date.now());
+        const s = (remain/1000);
+        timer.overlay.textContent = '⏱ 残り ' + s.toFixed(1) + ' 秒';
+        if(remain<=0){
+          try{ if(typeof playSound==='function') playSound('ng'); }catch(_){}
+          clearInterval(timer.id); timer.id=null;
+          timer.overlay.textContent = '⏱ 時間切れ';
+          setTimeout(()=>{ if(timer.overlay) timer.overlay.style.display='none'; }, 1500);
+        }
+      }
+      tick();
+      timer.id = setInterval(tick, 100);
+    }
+    // hook startTrainingCore and showCelebrate/resetBtn to manage timer
+    if(typeof window.startTrainingCore === 'function'){
+      const orig = window.startTrainingCore;
+      window.startTrainingCore = function(picked){
+        const out = orig(picked);
+        try{
+          if(OPT('countdownEnable', false)){
+            const sec = Math.max(1, OPT('countdownSec', 30));
+            start(sec);
+          }else{
+            stop();
+          }
+        }catch(_){}
+        return out;
+      };
+    }
+    ['resetBtn','repeatBtn','nextBtn','resumeBtn'].forEach(id=>{
+      const n = document.getElementById(id);
+      if(n) n.addEventListener('click', stop, {capture:true});
+    });
+    if(typeof window.showCelebrate==='function'){
+      const orig = window.showCelebrate;
+      window.showCelebrate = function(total, mistakes){ try{ stop(); }catch(_){ } return orig(total, mistakes); };
+    }
+  })();
+
+  // ---- Recorder: create kifu by playing on board ----
+  (function(){
+    const wrap = document.getElementById('boardWrap');
+    if(!wrap) return;
+
+    // Add button in settings card
+    if(settingsCard){
+      const field = document.createElement('div'); field.className='field row wrap';
+      const btn = document.createElement('button'); btn.id='openRecorderBtn'; btn.className='ghost'; btn.textContent='棋譜作成モード（録画）';
+      field.appendChild(btn); settingsCard.appendChild(field);
+      btn.addEventListener('click', open);
+    }
+
+    // overlay
+    const layer = document.createElement('div'); layer.className='rec-layer'; layer.id='recLayer';
+    layer.innerHTML = [
+      '<div class="panel">',
+      '<h3>棋譜作成モード</h3>',
+      '<div class="small muted">盤面をクリックして手を記録。合法手のみ保存されます。パスは必要時のみ許可。</div>',
+      '<div class="field"><label class="small">現在の記録</label><textarea id="recMovesView" rows="2" class="mono" readonly></textarea><div class="small muted" id="recMeta">—</div></div>',
+      '<div class="field"><div class="row wrap">',
+      '<button id="recPassBtn" class="ghost">PASS</button>',
+      '<button id="recUndoBtn" class="ghost">一手戻す</button>',
+      '<button id="recClearBtn" class="ghost">全消去</button>',
+      '</div></div>',
+      '<div class="field"><label class="small">名前（任意）</label><input id="recName" type="text" placeholder="問題名"></div>',
+      '<div class="field"><label class="small">備考（任意）</label><textarea id="recNote" rows="2" placeholder="メモや気づき"></textarea></div>',
+      '<div class="actions">',
+      '<button id="recSaveBtn" class="primary">保存して追加</button>',
+      '<button id="recCloseBtn">閉じる</button>',
+      '</div>',
+      '</div>'
+    ].join('');
+    wrap.appendChild(layer);
+
+    let recActive=false, backup=null, recMoves=[];
+    function cloneBoard(b){ return b.map(row=>row.slice()); }
+
+    function refresh(){
+      try{
+        const view = document.getElementById('recMovesView');
+        if(view) view.value = (recMoves||[]).join(' ');
+        const LM = legalMoves(board, currentPlayer);
+        const meta = document.getElementById('recMeta');
+        if(meta) meta.textContent = `手番：${currentPlayer===1?'黒':'白'}　合法手：${LM.length}`;
+        // mark legals
+        try{
+          const cells = document.querySelectorAll('#board .cell');
+          for(let i=0;i<64;i++) cells[i].classList.remove('legal');
+          LM.forEach(m => {
+            const idx = m.r*8 + m.c; const cell = cells[idx];
+            if(cell) cell.classList.add('legal');
+          });
+          wrap.classList.add('legal-only'); // enable hover outlines
+        }catch(_){}
+      }catch(_){}
+    }
+
+    function open(){
+      if(recActive) return;
+      // backup globals
+      backup = {
+        board: cloneBoard(board),
+        currentPlayer: currentPlayer,
+        training: training,
+        expectedMoves: (expectedMoves||[]).slice(),
+        moveIndex: moveIndex,
+        inspectMode: inspectMode
+      };
+      // enter record state
+      recActive = true; recMoves = [];
+      training = false; inspectMode = false;
+      board = newBoard(); currentPlayer = 1;
+      renderBoard(); refresh();
+      layer.style.display = 'flex';
+      document.addEventListener('click', capture, true);
+    }
+    function close(){
+      if(!recActive) return;
+      document.removeEventListener('click', capture, true);
+      wrap.classList.remove('legal-only');
+      layer.style.display = 'none';
+      // restore
+      board = backup.board; currentPlayer = backup.currentPlayer; training = backup.training;
+      expectedMoves = backup.expectedMoves; moveIndex = backup.moveIndex; inspectMode = backup.inspectMode;
+      recActive = false; renderBoard();
+    }
+
+    function capture(e){
+      if(!recActive) return;
+      const cell = e.target.closest && e.target.closest('.cell');
+      if(!cell) return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      const r = parseInt(cell.dataset.r,10), c = parseInt(cell.dataset.c,10);
+      const LM = legalMoves(board, currentPlayer);
+      const match = LM.find(m => m.r===r && m.c===c);
+      if(!match){ showToast('その手は合法ではありません'); return; }
+      applyMove(board, match, currentPlayer);
+      recMoves.push(cell.dataset.coord);
+      currentPlayer = -currentPlayer;
+      renderBoard(); refresh();
+    }
+    function recPass(){
+      if(!recActive) return;
+      const LM = legalMoves(board, currentPlayer);
+      if(LM.length>0){ showToast('合法手があるためPASSできません'); return; }
+      recMoves.push('P');
+      currentPlayer = -currentPlayer;
+      renderBoard(); refresh();
+    }
+    function recUndo(){
+      if(!recActive || !recMoves.length) return;
+      recMoves.pop();
+      // rebuild from scratch
+      board = newBoard(); currentPlayer = 1;
+      for(const t of recMoves){
+        if(t==='P' || t==='PASS'){
+          const LM = legalMoves(board, currentPlayer);
+          if(LM.length>0){ showToast('この記録は不整合の可能性があります（PASS無効）'); break; }
+          currentPlayer = -currentPlayer; continue;
+        }
+        const rc = coordToRC(t);
+        const LM = legalMoves(board, currentPlayer);
+        const match = LM.find(m=>m.r===rc[0] && m.c===rc[1]);
+        if(!match){ showToast('この記録は不整合の可能性があります'); break; }
+        applyMove(board, match, currentPlayer);
+        currentPlayer = -currentPlayer;
+      }
+      renderBoard(); refresh();
+    }
+    function recClear(){
+      recMoves = []; board = newBoard(); currentPlayer = 1; renderBoard(); refresh();
+    }
+    function recSave(){
+      try{
+        if(!recMoves.length){ alert('1手以上を記録してください'); return; }
+        const tokens = recMoves.slice();
+        const val = validateMoves(tokens);
+        if(!val.ok){ alert('記録の検証に失敗：' + val.error); return; }
+        const pk = currentPath();
+        const arr = store.kifuByPath[pk] || (store.kifuByPath[pk]=[]);
+        const sig = canonicalSignature(tokens);
+        if(arr.some(k=>k.sig===sig)){ alert('同一棋譜が既に存在します'); return; }
+        const name = (document.getElementById('recName')?.value||'').trim();
+        const note = (document.getElementById('recNote')?.value||'').trim();
+        arr.push({
+          id: Date.now().toString(36)+Math.random().toString(36).slice(2,7),
+          moves: tokens, sig, enabled:true, name, tags:[], comment:note, addedAt: Date.now(),
+          _idx: arr.length, stats:{ attempts:0, solved:0, mistakes:0 }
+        });
+        saveStore(store);
+        updateCountsAndPath();
+        showToast('棋譜を追加しました');
+        try{ if(document.getElementById('kifuModal')?.style.display==='flex') renderKifuList(); }catch(_){}
+        close();
+      }catch(e){
+        alert('保存に失敗しました');
+      }
+    }
+
+    layer.querySelector('#recPassBtn').addEventListener('click', recPass);
+    layer.querySelector('#recUndoBtn').addEventListener('click', recUndo);
+    layer.querySelector('#recClearBtn').addEventListener('click', recClear);
+    layer.querySelector('#recSaveBtn').addEventListener('click', recSave);
+    layer.querySelector('#recCloseBtn').addEventListener('click', close);
+    window._v10_recorder = { open, close };
+  })();
+
+  // ---- Symmetry: add 90°/270°/diagonals and RANDOM+ ----
+  (function(){
+    try{
+      const sel = document.getElementById('symmetrySel');
+      const opts = [
+        ['ROT90','回転90°'], ['ROT270','回転270°'],
+        ['DIAG','主対角線（転置）'], ['ADIAG','副対角線']
+      ];
+      if(sel){
+        const existing = new Set(Array.from(sel.options).map(o=>o.value));
+        opts.forEach(([v,t])=>{
+          if(!existing.has(v)){
+            const o = document.createElement('option'); o.value=v; o.textContent=t; sel.appendChild(o);
+          }
+        });
+        if(!existing.has('RANDOM_PLUS')){
+          const o = document.createElement('option'); o.value='RANDOM_PLUS'; o.textContent='ランダム（全対称）';
+          sel.appendChild(o);
+        }
+      }
+      function transformCoordPlus(coord, mode){
+        const m = String(coord).trim().toUpperCase().match(/^([A-H])([1-8])$/);
+        if(!m) return coord;
+        const cols = 'ABCDEFGH';
+        let c = cols.indexOf(m[1]), r = parseInt(m[2],10)-1;
+        if(mode==='ROT90'){ const nc = 7 - r, nr = c; c = nc; r = nr; }
+        else if(mode==='ROT270'){ const nc = r, nr = 7 - c; c = nc; r = nr; }
+        else if(mode==='DIAG'){ const nc = r, nr = c; c = nc; r = nr; }
+        else if(mode==='ADIAG'){ const nc = 7 - r, nr = 7 - c; c = nc; r = nr; }
+        else return coord;
+        return cols[c] + String(r+1);
+      }
+      function transformMovesPlus(moves, mode){
+        return (moves||[]).map(t => (t==='P'||t==='PASS') ? t : transformCoordPlus(t, mode));
+      }
+      function pick(mode){
+        if(mode==='RANDOM_PLUS'){
+          const cand = ['HFLIP','VFLIP','ROT180','ROT90','ROT270','DIAG','ADIAG'];
+          return cand[Math.floor(Math.random()*cand.length)];
+        }
+        return mode;
+      }
+      if(typeof window.startTrainingCore === 'function'){
+        const orig = window.startTrainingCore;
+        window.startTrainingCore = function(picked){
+          let mode = OPT('symMode','NONE');
+          mode = pick(mode);
+          if(['ROT90','ROT270','DIAG','ADIAG'].includes(mode)){
+            // prevent v9 symmetry from applying by temporarily setting to NONE
+            const prev = OPT('symMode','NONE');
+            try{
+              SETOPT('symMode','NONE');
+              const clone = Object.assign({}, picked);
+              clone.moves = transformMovesPlus(picked.moves, mode);
+              setTimeout(()=>{ try{ setStatus(`対称変換：${({'ROT90':'回転90°','ROT270':'回転270°','DIAG':'主対角線','ADIAG':'副対角線'})[mode]}`); }catch(_){ } }, 10);
+              const out = orig(clone);
+              return out;
+            }finally{
+              SETOPT('symMode', prev);
+            }
+          }
+          return orig(picked);
+        };
+      }
+    }catch(_){}
+  })();
+
+  // ---- Kifu modal: bulk operations for filtered set ----
+  (function(){
+    function inject(){
+      try{
+        const hdr = document.querySelector('#kifuModal .klist-controls');
+        if(!hdr || document.getElementById('bulkOps')) return;
+        const box = document.createElement('span'); box.id='bulkOps';
+        box.style.display='inline-flex'; box.style.gap='6px'; box.style.flexWrap='wrap'; box.style.marginLeft='8px';
+        function mk(text, fn){
+          const b = document.createElement('button'); b.className='ghost tiny'; b.textContent=text;
+          b.addEventListener('click', fn); return b;
+        }
+        const btnOn  = mk('表示中→出題オン', ()=> bulkEnableFiltered(true));
+        const btnOff = mk('表示中→出題オフ', ()=> bulkEnableFiltered(false));
+        const btnQAdd = mk('表示中→キュー追加', ()=> bulkQueueFiltered(true));
+        const btnQDel = mk('表示中→キュー削除', ()=> bulkQueueFiltered(false));
+        box.appendChild(btnOn); box.appendChild(btnOff); box.appendChild(btnQAdd); box.appendChild(btnQDel);
+        hdr.appendChild(box);
+      }catch(_){}
+    }
+    function currentFiltered(){
+      const pk = currentPath();
+      const arr = getSortedArray(pk); // already applies search & tag filter
+      return { pk, arr };
+    }
+    function bulkEnableFiltered(flag){
+      const { pk, arr } = currentFiltered();
+      if(!arr.length){ alert('対象がありません'); return; }
+      arr.forEach(k => { k.enabled = !!flag; });
+      saveStore(store); renderKifuList(); updateEnabledCount(); showToast(flag?'出題オンを適用':'出題オフを適用');
+    }
+    function bulkQueueFiltered(add){
+      const { pk, arr } = currentFiltered();
+      if(!arr.length){ alert('対象がありません'); return; }
+      const q = getQueueByPath(pk).slice();
+      if(add){
+        const set = new Set(q);
+        arr.forEach(k => set.add(k.id));
+        store.queueByPath[pk] = Array.from(set);
+      }else{
+        const ids = new Set(arr.map(k=>k.id));
+        store.queueByPath[pk] = q.filter(id => !ids.has(id));
+      }
+      saveStore(store); updateQueueView(); showToast(add?'キューに追加しました':'キューから削除しました');
+    }
+    if(typeof window.openKifuModal === 'function'){
+      const orig = window.openKifuModal;
+      window.openKifuModal = function(){ orig(); setTimeout(inject, 0); };
+    }else{
+      inject();
+    }
+  })();
+
+  // ---- Drag & Drop import area on I/O card + CSV log export ----
+  (function(){
+    const ioCard = (function(){
+      const cards = document.querySelectorAll('.panel > .card');
+      return cards && cards[0] ? cards[0] : null;
+    })();
+    if(!ioCard) return;
+    // Dropzone
+    const field = ioCard.querySelector('.field.row.wrap:last-of-type') || ioCard;
+    const dz = document.createElement('div'); dz.className='dropzone'; dz.id='jsonDropZone';
+    dz.textContent = 'JSONをここにドラッグ＆ドロップ（全体バックアップ／小フォルダエクスポート／単純な棋譜配列に対応）';
+    field.parentNode.insertBefore(dz, field.nextSibling);
+
+    ;['dragenter','dragover'].forEach(ev=>{
+      dz.addEventListener(ev, (e)=>{ e.preventDefault(); dz.classList.add('drag'); });
+    });
+    ;['dragleave','drop'].forEach(ev=>{
+      dz.addEventListener(ev, (e)=>{ if(ev==='drop') return; e.preventDefault(); dz.classList.remove('drag'); });
+    });
+    dz.addEventListener('drop', (e)=>{
+      e.preventDefault(); dz.classList.remove('drag');
+      const file = e.dataTransfer.files && e.dataTransfer.files[0];
+      if(!file){ showToast('ファイルが見つかりません'); return; }
+      const reader = new FileReader();
+      reader.onload = ()=>{
+        try{
+          const txt = reader.result;
+          const obj = JSON.parse(txt);
+          // type A: full store
+          if(obj && Array.isArray(obj.bigFolders) && obj.kifuByPath){
+            if(confirm('全体バックアップ形式です。現在の全データを置き換えますか？')){
+              store = obj; saveStore(store);
+              refreshBigSelect(); updateCountsAndPath(); renderKifuList?.(); showToast('全体データをインポートしました');
+            }
+            return;
+          }
+          // type B: folder export
+          if(obj && obj.type==='reversi_trainer_folder_export_v1' && obj.kifu){
+            const pk = currentPath();
+            const arr = store.kifuByPath[pk] || (store.kifuByPath[pk]=[]);
+            let ok=0, dup=0;
+            obj.kifu.forEach(k=>{
+              const tokens = (k.moves||[]).slice();
+              const val = validateMoves(tokens);
+              if(!val.ok) return;
+              const sig = canonicalSignature(tokens);
+              if(arr.some(x=>x.sig===sig)){ dup++; return; }
+              arr.push({ id: Date.now().toString(36)+Math.random().toString(36).slice(2,7),
+                         moves: tokens, sig, enabled: true, name: k.name||'', tags: (k.tags||[]), comment:(k.comment||''), addedAt: Date.now(), _idx: arr.length,
+                         stats: { attempts:0, solved:0, mistakes:0 } });
+              ok++;
+            });
+            saveStore(store); updateCountsAndPath(); renderKifuList?.();
+            alert(`この小フォルダにインポートしました：追加 ${ok} 件／重複 ${dup} 件`);
+            return;
+          }
+          // type C: simple array of strings or moves per line
+          if(Array.isArray(obj)){
+            const pk = currentPath();
+            const arr = store.kifuByPath[pk] || (store.kifuByPath[pk]=[]);
+            let ok=0, dup=0, ng=0;
+            obj.forEach(line=>{
+              const tokens = tokenizeKifuString(String(line));
+              if(!tokens){ ng++; return; }
+              const val = validateMoves(tokens);
+              if(!val.ok){ ng++; return; }
+              const sig = canonicalSignature(tokens);
+              if(arr.some(x=>x.sig===sig)){ dup++; return; }
+              arr.push({ id: Date.now().toString(36)+Math.random().toString(36).slice(2,7),
+                         moves: tokens, sig, enabled: true, name:'', tags:[], comment:'', addedAt: Date.now(), _idx: arr.length,
+                         stats: { attempts:0, solved:0, mistakes:0 } });
+              ok++;
+            });
+            saveStore(store); updateCountsAndPath(); renderKifuList?.();
+            alert(`この小フォルダに追加：追加 ${ok}／重複 ${dup}／NG ${ng}`);
+            return;
+          }
+          alert('未対応のJSON形式です');
+        }catch(err){
+          alert('JSONの解析に失敗しました');
+        }
+      };
+      reader.readAsText(file, 'utf-8');
+    });
+
+    // CSV log export buttons
+    const logRow = document.createElement('div'); logRow.className='row wrap'; logRow.style.marginTop='8px';
+    const logBtn = document.createElement('button'); logBtn.className='ghost'; logBtn.id='exportLogBtn'; logBtn.textContent='試行ログをCSV出力';
+    const clrBtn = document.createElement('button'); clrBtn.className='ghost'; clrBtn.id='clearLogBtn'; clrBtn.textContent='試行ログを消去';
+    logRow.appendChild(logBtn); logRow.appendChild(clrBtn);
+    field.parentNode.insertBefore(logRow, dz.nextSibling);
+
+    function getLogs(){ try{ return JSON.parse(localStorage.getItem(STORE_PREFIX+'opt10_logs')||'[]'); }catch(_){ return []; } }
+    function setLogs(a){ try{ localStorage.setItem(STORE_PREFIX+'opt10_logs', JSON.stringify(a)); }catch(_){ } }
+
+    function toCSV(rows){
+      const header = ['timestamp','big','small','path','kifu_index','kifu_id','kifu_name','kifu_len','range_start','range_end','mistakes','time_ms','solved','tags'];
+      const esc = s => ('"'+String(s).replace(/"/g,'""')+'"');
+      const lines = [header.join(',')];
+      rows.forEach(r=>{
+        lines.push([
+          r.timestamp, r.big, r.small, r.path, r.kifu_index, r.kifu_id, r.kifu_name, r.kifu_len,
+          r.range_start, r.range_end, r.mistakes, r.time_ms, r.solved ? 1 : 0, (r.tags||[]).join('|')
+        ].map(esc).join(','));
+      });
+      return lines.join('\n');
+    }
+
+    logBtn.addEventListener('click', ()=>{
+      const rows = getLogs();
+      if(!rows.length){ alert('ログがありません'); return; }
+      const blob = new Blob([toCSV(rows)], {type:'text/csv'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href=url;
+      const dt = new Date(); const y=dt.getFullYear(), m=String(dt.getMonth()+1).padStart(2,'0'), d=String(dt.getDate()).padStart(2,'0');
+      a.download = `reversi_trainer_logs_${y}${m}${d}.csv`;
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    });
+    clrBtn.addEventListener('click', ()=>{
+      if(confirm('試行ログをすべて削除しますか？')){ setLogs([]); showToast('ログを消去しました'); }
+    });
+
+    // hook showCelebrate to push a row
+    if(typeof window.showCelebrate === 'function'){
+      const orig = window.showCelebrate;
+      window.showCelebrate = function(total, mistakes){
+        const out = orig(total, mistakes);
+        try{
+          const pk = currentPath();
+          const parts = pk.split('/');
+          const arr = store.kifuByPath[pk] || [];
+          const k = arr.find(x=>x.id===currentKifuId);
+          const idx = (typeof k?._idx==='number') ? (k._idx+1) : (arr.findIndex(x=>x.id===currentKifuId)+1);
+          const timeMs = (window._v9 && _v9.timerStart) ? Math.max(0, Date.now() - _v9.timerStart) : null;
+          const row = {
+            timestamp: new Date().toISOString(),
+            big: parts[0]||'',
+            small: parts[1] && parts[1]!=='__ROOT__' ? parts[1] : '',
+            path: pk,
+            kifu_index: idx||'',
+            kifu_id: currentKifuId||'',
+            kifu_name: (k&&k.name)||'',
+            kifu_len: (k&&k.moves&&k.moves.length)||'',
+            range_start: (typeof window.rangeStart!=='undefined') ? window.rangeStart : '',
+            range_end: (typeof window.rangeEnd!=='undefined') ? window.rangeEnd : '',
+            mistakes: mistakes,
+            time_ms: timeMs,
+            solved: mistakes===0,
+            tags: (k&&k.tags)||[]
+          };
+          const logs = getLogs(); logs.push(row); setLogs(logs);
+        }catch(_){}
+        return out;
+      };
+    }
+  })();
+
+})(); // end v10
+</script>
+
+<!-- ===== v11 Addons by ChatGPT (2025-10-19) ===== -->
+<style>
+/* v11: rotation, mcq, keyboard overlay */
+#boardWrap.rot180 { transform: rotate(180deg); }
+#boardWrap.rot180 .axis, 
+#boardWrap.rot180 .corner-label, 
+#boardWrap.rot180 .count-overlay,
+#boardWrap.rot180 .inspect-bar,
+#boardWrap.rot180 .inspect-action,
+#boardWrap.rot180 .timer-overlay { transform: rotate(180deg); }
+
+.mcq-overlay{
+  position:absolute; left:50%; transform:translateX(-50%); bottom:12px; z-index:7;
+  display:none; gap:6px; flex-wrap:wrap; justify-content:center;
+}
+.mcq-overlay .mcq-btn{
+  padding:6px 10px; border-radius:999px; border:1px solid #ccc; background:#fff; cursor:pointer; font-size:.92rem;
+}
+body.theme-dark .mcq-overlay .mcq-btn{ background:#1b2027; border-color:#2a2f3a; color:#e7ebf3; }
+
+.kbd-overlay{
+  position:absolute; left:10px; bottom:10px; z-index:7;
+  background:rgba(0,0,0,.55); color:#fff; padding:2px 6px; border-radius:6px; font-variant-numeric:tabular-nums; display:none;
+}
+</style>
+
+<script>
+(function(){
+  // Local option helpers (v11 namespace)
+  const OPT = (k, d) => { try{ const v = localStorage.getItem(STORE_PREFIX + 'opt11_' + k); return v==null?d:JSON.parse(v);}catch(_){ return d; } };
+  const SETOPT = (k, v) => { try{ localStorage.setItem(STORE_PREFIX + 'opt11_' + k, JSON.stringify(v)); }catch(_){ } };
+
+  // ---- Version bump ----
+  try{
+    document.title = 'オセロ暗記トレーナー v11（白視点/読み上げ/四択/キーボード入力/全体ヒート/キュー並替/統計/Anki TSV）';
+    const h1 = document.querySelector('h1');
+    if(h1) h1.textContent = 'オセロ暗記トレーナー v11';
+  }catch(_){}
+
+  // ---- Settings card reference ----
+  const settingsCard = (function(){
+    const cards = document.querySelectorAll('.dockGrid .card');
+    return cards && cards[0] ? cards[0] : null;
+  })();
+
+  // ---- Inject new settings (white-view / speech / MCQ / global heat) ----
+  if(settingsCard){
+    const field = document.createElement('div'); field.className='field row wrap';
+
+    // White viewpoint
+    const whiteChk = document.createElement('input'); whiteChk.type='checkbox'; whiteChk.id='whiteViewChk';
+    whiteChk.checked = !!OPT('whiteView', false);
+    const whiteLbl = document.createElement('label'); whiteLbl.className='small';
+    whiteLbl.appendChild(whiteChk); whiteLbl.appendChild(document.createTextNode(' 白番視点で盤を180°回転'));
+    field.appendChild(whiteLbl);
+
+    // Speech
+    const speechChk = document.createElement('input'); speechChk.type='checkbox'; speechChk.id='speechChk';
+    speechChk.checked = !!OPT('speech', false);
+    const speechLbl = document.createElement('label'); speechLbl.className='small';
+    speechLbl.appendChild(speechChk); speechLbl.appendChild(document.createTextNode(' 読み上げ（正誤/正解手）'));
+    field.appendChild(document.createTextNode('　'));
+    field.appendChild(speechLbl);
+
+    // MCQ
+    const mcqChk = document.createElement('input'); mcqChk.type='checkbox'; mcqChk.id='mcqChk';
+    mcqChk.checked = !!OPT('mcq', false);
+    const mcqLbl = document.createElement('label'); mcqLbl.className='small';
+    mcqLbl.appendChild(mcqChk); mcqLbl.appendChild(document.createTextNode(' 四択クイズモード（1〜4キー対応）'));
+    field.appendChild(document.createTextNode('　'));
+    field.appendChild(mcqLbl);
+
+    // Global heatmap
+    const gheatChk = document.createElement('input'); gheatChk.type='checkbox'; gheatChk.id='globalHeatChk';
+    gheatChk.checked = !!OPT('globalHeat', false);
+    const gheatLbl = document.createElement('label'); gheatLbl.className='small';
+    gheatLbl.appendChild(gheatChk); gheatLbl.appendChild(document.createTextNode(' 全体誤答ヒートマップ'));
+    field.appendChild(document.createTextNode('　'));
+    field.appendChild(gheatLbl);
+
+    // Tips
+    const tip = document.createElement('span'); tip.className='small muted';
+    tip.textContent = '（ショートカット：T=白視点／V=読み上げ／C=四択切替／1〜4=四択回答／A〜H→1〜8=座標入力）';
+    field.appendChild(document.createTextNode('　'));
+    field.appendChild(tip);
+
+    settingsCard.appendChild(field);
+
+    // Persist + apply
+    whiteChk.addEventListener('change', ()=>{ SETOPT('whiteView', !!whiteChk.checked); applyWhiteView(); });
+    speechChk.addEventListener('change', ()=> SETOPT('speech', !!speechChk.checked));
+    mcqChk.addEventListener('change', ()=>{ SETOPT('mcq', !!mcqChk.checked); updateMCQ(); });
+    gheatChk.addEventListener('change', ()=>{ SETOPT('globalHeat', !!gheatChk.checked); updateGlobalHeatUI(); drawGlobalHeat(); });
+  }
+
+  // ---- White viewpoint rotation ----
+  function applyWhiteView(){
+    const wrap = document.getElementById('boardWrap');
+    if(!wrap) return;
+    wrap.classList.toggle('rot180', !!OPT('whiteView', false));
+  }
+  applyWhiteView();
+
+  // ---- Speech helpers ----
+  function speakJa(text){
+    if(!OPT('speech', false)) return;
+    try{
+      if(!('speechSynthesis' in window)) return;
+      const u = new SpeechSynthesisUtterance(String(text||'')); u.lang = 'ja-JP';
+      try{ speechSynthesis.cancel(); }catch(_){}
+      speechSynthesis.speak(u);
+    }catch(_){}
+  }
+
+  // Patch playSound to also speak
+  if(typeof window.playSound === 'function' && !window._v11_playSound_patched){
+    const orig = window.playSound;
+    window.playSound = function(type){
+      try{
+        orig(type);
+        if(type==='ng'){
+          const token = (window.expectedMoves && window.expectedMoves[window.moveIndex]) || null;
+          if(token && token!=='P' && token!=='PASS'){ speakJa('違います。正解は ' + token); }
+          else { speakJa('違います'); }
+        }else if(type==='ok'){ speakJa('正解'); }
+        else if(type==='success'){ speakJa('クリア'); }
+      }catch(_){}
+    };
+    window._v11_playSound_patched = true;
+  }
+
+  // ---- MCQ overlay ----
+  (function(){
+    const wrap = document.getElementById('boardWrap');
+    if(!wrap) return;
+    if(!document.getElementById('mcqOverlay')){
+      const o = document.createElement('div'); o.id='mcqOverlay'; o.className='mcq-overlay';
+      wrap.appendChild(o);
+    }
+  })();
+
+  function mcqOn(){ return !!OPT('mcq', false); }
+  function updateMCQ(){
+    try{
+      const overlay = document.getElementById('mcqOverlay'); if(!overlay) return;
+      if(!mcqOn() || !window.training){ overlay.style.display='none'; return; }
+      const myTurn = window.selfBothMode || (window.currentPlayer === window.myColor);
+      const token = window.expectedMoves ? window.expectedMoves[window.moveIndex] : null;
+      if(!myTurn || !token || token==='P' || token==='PASS'){ overlay.style.display='none'; return; }
+      const LM = window.legalMoves(window.board, window.currentPlayer);
+      const rc = window.coordToRC(token);
+      const ok = LM.find(m=> m.r===rc[0] && m.c===rc[1]);
+      if(!ok){ overlay.style.display='none'; return; }
+
+      const opts = [ token ];
+      const others = LM.map(m => window.toCoord(m.r, m.c)).filter(c => c !== token);
+      for(let i=others.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); const t=others[i]; others[i]=others[j]; others[j]=t; }
+      opts.push(...others.slice(0,3));
+      for(let i=opts.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); const t=opts[i]; opts[i]=opts[j]; opts[j]=t; }
+
+      overlay.innerHTML='';
+      opts.forEach((coord, idx)=>{
+        const b = document.createElement('button'); b.className='mcq-btn'; b.dataset.coord=coord;
+        b.textContent = (idx+1) + '. ' + coord;
+        b.addEventListener('click', ()=>{
+          const cell = document.querySelector('.cell[data-coord="'+coord+'"]');
+          if(cell) cell.click();
+          updateMCQ();
+        });
+        overlay.appendChild(b);
+      });
+      overlay.style.display='flex';
+    }catch(_){}
+  }
+
+  if(typeof window.renderBoard === 'function'){
+    const orig = window.renderBoard;
+    window.renderBoard = function(){ orig(); try{ updateMCQ(); }catch(_){} try{ updateGlobalHeatUI(); drawGlobalHeat(); }catch(_){} };
+  }
+
+  // Keyboard shortcuts for MCQ and toggles + coordinate input
+  (function(){
+    const wrap = document.getElementById('boardWrap');
+    if(wrap && !document.getElementById('kbdOverlay')){
+      const o = document.createElement('div'); o.id='kbdOverlay'; o.className='kbd-overlay'; o.style.display='none';
+      wrap.appendChild(o);
+    }
+    let buf = '';
+    function resetBuf(){ buf=''; const o=document.getElementById('kbdOverlay'); if(o) o.style.display='none'; }
+
+    window.addEventListener('keydown', (e)=>{
+      const tag = (e.target && e.target.tagName ? e.target.tagName.toLowerCase() : '');
+      if(tag==='input' || tag==='textarea' || tag==='select') return;
+
+      // Toggles
+      if(e.key==='t' || e.key==='T'){ const v=!OPT('whiteView', false); SETOPT('whiteView', v); applyWhiteView(); e.preventDefault(); return; }
+      if(e.key==='v' || e.key==='V'){ const v=!OPT('speech', false); SETOPT('speech', v); speakJa(v?'読み上げオン':'読み上げオフ'); e.preventDefault(); return; }
+      if(e.key==='c' || e.key==='C'){ const v=!OPT('mcq', false); SETOPT('mcq', v); updateMCQ(); e.preventDefault(); return; }
+
+      // MCQ 1-4
+      if(['1','2','3','4'].includes(e.key)){
+        const overlay = document.getElementById('mcqOverlay');
+        if(overlay && overlay.style.display!=='none'){
+          const idx = parseInt(e.key,10)-1;
+          const btn = overlay.querySelectorAll('.mcq-btn')[idx];
+          if(btn){ e.preventDefault(); btn.click(); return; }
+        }
+      }
+
+      // Coordinate typing A-H then 1-8
+      if(/^[a-hA-H]$/.test(e.key)){
+        buf = e.key.toUpperCase();
+        const o = document.getElementById('kbdOverlay'); if(o){ o.textContent = '入力: ' + buf + ' _'; o.style.display='inline-block'; }
+        e.preventDefault(); return;
+      }
+      if(/^[1-8]$/.test(e.key) && buf){
+        const coord = buf + e.key;
+        const o = document.getElementById('kbdOverlay'); if(o){ o.textContent = '入力: ' + coord; }
+        const cell = document.querySelector('.cell[data-coord="'+coord+'"]');
+        setTimeout(resetBuf, 600);
+        if(cell){ e.preventDefault(); cell.click(); }
+        return;
+      }
+      if(e.key==='Backspace'){ resetBuf(); return; }
+    }, {capture:true});
+  })();
+
+  // ---- Global mistake heatmap (aggregate across all problems) ----
+  function getGlobalMap(){ try{ return JSON.parse(localStorage.getItem(STORE_PREFIX+'opt11_globalMistake')||'{}'); }catch(_){ return {}; } }
+  function setGlobalMap(m){ try{ localStorage.setItem(STORE_PREFIX+'opt11_globalMistake', JSON.stringify(m)); }catch(_){ } }
+
+  // Intercept flashX to also add to global map
+  if(typeof window.flashX === 'function' && !window._v11_flash_patched){
+    const orig = window.flashX;
+    window.flashX = function(cell){
+      try{
+        const coord = cell && cell.getAttribute ? cell.getAttribute('data-coord') : null;
+        if(coord){
+          const map = getGlobalMap(); map[coord] = (map[coord]||0) + 1; setGlobalMap(map);
+        }
+      }catch(_){}
+      orig(cell);
+    };
+    window._v11_flash_patched = true;
+  }
+
+  function ensureHeatLayerV11(){
+    document.querySelectorAll('#board .cell').forEach(cell=>{
+      if(!cell.querySelector('.heat')){
+        const h=document.createElement('div'); h.className='heat';
+        const t=document.createElement('div'); t.className='cnt';
+        h.appendChild(t); cell.appendChild(h);
+      }
+    });
+  }
+
+  function getHeatOnV9(){ try{ return JSON.parse(localStorage.getItem(STORE_PREFIX+'opt9_heatOn')||'false'); }catch(_){ return false; } }
+
+  function updateGlobalHeatUI(){
+    const wrap = document.getElementById('boardWrap'); if(!wrap) return;
+    const on = !!OPT('globalHeat', false);
+    if(on) wrap.classList.add('heat-on');
+    else if(!getHeatOnV9()) wrap.classList.remove('heat-on');
+  }
+
+  function drawGlobalHeat(){
+    try{
+      if(!OPT('globalHeat', false)) return;
+      ensureHeatLayerV11();
+      const map = getGlobalMap();
+      let maxv = 0; Object.values(map).forEach(v=>{ if(v>maxv) maxv=v; });
+      const cells = document.querySelectorAll('#board .cell');
+      cells.forEach(cell=>{
+        const coord = cell.getAttribute('data-coord');
+        const v = map[coord]||0;
+        const heat = cell.querySelector('.heat');
+        if(!heat) return;
+        const t = heat.querySelector('.cnt');
+        if(v<=0){ heat.style.background='transparent'; t.textContent=''; return; }
+        const alpha = Math.min(0.15 + 0.35*(v/(maxv||1)), 0.5);
+        heat.style.background = 'rgba(220,32,32,' + alpha.toFixed(3) + ')';
+        t.textContent = String(v);
+      });
+    }catch(_){}
+  }
+
+  // ---- Queue: drag & drop reorder chips ----
+  if(typeof window.updateQueueView === 'function' && !window._v11_queue_patched){
+    const orig = window.updateQueueView;
+    window.updateQueueView = function(){
+      orig();
+      try{
+        const view = document.getElementById('queueView'); if(!view) return;
+        const pk = currentPath();
+        Array.from(view.children).forEach((chip, idx)=>{
+          chip.setAttribute('draggable','true');
+          chip.dataset.idx = String(idx);
+          chip.addEventListener('dragstart', (e)=>{ e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain', chip.dataset.idx); chip.classList.add('dragging'); });
+          chip.addEventListener('dragend', ()=> chip.classList.remove('dragging'));
+          chip.addEventListener('dragover', (e)=>{ e.preventDefault(); chip.style.outline='2px dashed #8ab4ff'; });
+          chip.addEventListener('dragleave', ()=>{ chip.style.outline=''; });
+          chip.addEventListener('drop', (e)=>{
+            e.preventDefault(); chip.style.outline='';
+            const from = parseInt(e.dataTransfer.getData('text/plain'),10);
+            const to = parseInt(chip.dataset.idx,10);
+            const q = getQueueByPath(pk);
+            if(isFinite(from) && isFinite(to) && q && q.length){
+              const item = q.splice(from,1)[0]; q.splice(to,0,item);
+              saveStore(store); updateQueueView(); showToast('キューを並べ替えました');
+            }
+          });
+        });
+      }catch(_){}
+    };
+    window._v11_queue_patched = true;
+  }
+
+  // ---- Stats modal + Anki TSV export ----
+  (function(){
+    const topbar = document.querySelector('.topbar');
+    if(topbar && !document.getElementById('openStatsBtn')){
+      const b = document.createElement('button'); b.id='openStatsBtn'; b.className='ghost'; b.textContent='統計';
+      b.style.marginLeft = '6px';
+      b.addEventListener('click', openStats);
+      topbar.appendChild(b);
+    }
+
+    if(!document.getElementById('statsModal')){
+      const modal = document.createElement('div'); modal.className='modal'; modal.id='statsModal';
+      modal.innerHTML = [
+        '<div class="window">',
+        '<header><h3>統計（<span id="statsPath">—</span>）</h3>',
+        '<button class="ghost" id="statsCloseBtn">閉じる</button></header>',
+        '<div class="body"><div id="statsBody" class="field"></div></div>',
+        '<div class="footer"><div class="row">',
+        '<button class="ghost" id="exportAnkiBtn">Anki用TSV（この小フォルダ）</button>',
+        '<button class="ghost" id="exportStatsBtn">統計CSV（この小フォルダ）</button>',
+        '</div></div>',
+        '</div>'
+      ].join('');
+      document.body.appendChild(modal);
+      modal.querySelector('#statsCloseBtn').addEventListener('click', ()=> modal.style.display='none');
+      modal.addEventListener('click', (e)=>{ if(e.target===modal) modal.style.display='none'; });
+      document.getElementById('exportAnkiBtn').addEventListener('click', exportAnkiTSV);
+      document.getElementById('exportStatsBtn').addEventListener('click', exportStatsCSV);
+    }
+
+    function openStats(){
+      try{
+        const pk = currentPath();
+        const arr = store.kifuByPath[pk] || [];
+        const body = document.getElementById('statsBody');
+        document.getElementById('statsPath').textContent = pk;
+
+        const total = arr.length;
+        const enabled = arr.filter(k=>k.enabled!==false).length;
+        const cleared = arr.filter(k=> (typeof k.manualCleared==='boolean' ? k.manualCleared : (k.stats && (k.stats.solved||0)>0))).length;
+        const attempts = arr.reduce((s,k)=> s + (k.stats?.attempts||0), 0);
+        const solved = arr.reduce((s,k)=> s + (k.stats?.solved||0), 0);
+        const mistakes = arr.reduce((s,k)=> s + (k.stats?.mistakes||0), 0);
+        const bestTimes = arr.map(k=> k.stats?.time?.bestMs).filter(v=> typeof v==='number' && isFinite(v));
+        const avgBest = bestTimes.length ? (bestTimes.reduce((a,b)=>a+b,0)/bestTimes.length) : null;
+
+        function div(html){ const n=document.createElement('div'); n.innerHTML=html; return n; }
+
+        body.innerHTML='';
+        body.appendChild(div('<b>概要</b>'));
+        body.appendChild(div('問題数：' + total + '（出題オン：' + enabled + '／クリア：' + cleared + '）'));
+        body.appendChild(div('試行：' + attempts + '　正解：' + solved + '　誤答：' + mistakes + '　正解率：' + (attempts? ((solved/attempts*100).toFixed(1)+'%') : '—')));
+        body.appendChild(div('平均ベストタイム：' + (avgBest!=null ? (avgBest/1000).toFixed(2)+' 秒' : '—')));
+
+        // hardest top5
+        const cand = arr.filter(k=> (k.stats?.attempts||0)>0);
+        cand.sort((a,b)=>{
+          const ra = (a.stats.mistakes||0)/Math.max(1,(a.stats.attempts||0));
+          const rb = (b.stats.mistakes||0)/Math.max(1,(b.stats.attempts||0));
+          if(rb!==ra) return rb - ra;
+          return (b.stats.mistakes||0)-(a.stats.mistakes||0);
+        });
+        const top = cand.slice(0,5);
+        if(top.length){
+          const list = document.createElement('div'); list.className='field';
+          list.appendChild(div('<b>要復習（誤答率順 Top 5）</b>'));
+          top.forEach((k,i)=>{
+            const name = (k.name||'（無名）');
+            const rate = ((k.stats.mistakes||0)/Math.max(1,(k.stats.attempts||0))*100).toFixed(0);
+            const len = (k.moves||[]).length;
+            const tm = k.stats?.time?.bestMs;
+            const row = document.createElement('div'); row.className='small';
+            row.textContent = (i+1) + '. ' + name + '（' + len + '手）｜誤答率 ' + rate + '%｜試行 ' + (k.stats.attempts||0) + '｜ベスト ' + (tm!=null?(tm/1000).toFixed(2)+'s':'—');
+            list.appendChild(row);
+          });
+          body.appendChild(list);
+        }
+
+        document.getElementById('statsModal').style.display='flex';
+      }catch(_){}
+    }
+
+    function exportAnkiTSV(){
+      // Basic-friendly TSV with 4 fields: Name, Moves, Tags, Note
+      try{
+        const pk = currentPath();
+        const arr = store.kifuByPath[pk] || [];
+        const rows = arr.map(k=>[
+          k.name || '',
+          (k.moves||[]).join(' '),
+          (k.tags||[]).join(' '),
+          k.comment || ''
+        ]);
+        const lines = rows.map(cols => cols.map(s => String(s).replace(/\t/g, ' ').replace(/\r?\n/g, ' / ')).join('\t'));
+        const tsv = lines.join('\n');
+        const blob = new Blob([tsv], {type:'text/tab-separated-values'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href=url; a.download = (pk.replaceAll('/','__')||'folder') + '_anki.tsv';
+        document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 1000);
+      }catch(e){ alert('TSV出力に失敗しました'); }
+    }
+
+    function exportStatsCSV(){
+      try{
+        const pk = currentPath();
+        const arr = store.kifuByPath[pk] || [];
+        const header = ['id','name','len','enabled','attempts','solved','mistakes','best_ms','avg_ms','tags'];
+        const lines = [header.join(',')];
+        arr.forEach(k=>{
+          const tm = k.stats?.time || {};
+          const cols = [
+            k.id,
+            (k.name||'').replace(/"/g,'""'),
+            (k.moves||[]).length,
+            (k.enabled!==false)?1:0,
+            k.stats?.attempts||0,
+            k.stats?.solved||0,
+            k.stats?.mistakes||0,
+            (typeof tm.bestMs==='number'?tm.bestMs:''),
+            (typeof tm.avgMs==='number'?Math.round(tm.avgMs):''),
+            (k.tags||[]).join('|').replace(/"/g,'""')
+          ];
+          lines.push(cols.map(x => '"' + String(x) + '"').join(','));
+        });
+        const csv = lines.join('\n');
+        const blob = new Blob([csv], {type:'text/csv'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href=url; a.download = (pk.replaceAll('/','__')||'folder') + '_stats.csv';
+        document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 1000);
+      }catch(e){ alert('CSV出力に失敗しました'); }
+    }
+  })();
+
+})(); // end v11
+</script>
+
+
+<!-- ===== v12 Addons by ChatGPT (2025-10-19) ===== -->
+<style>
+/* v12: voice overlay */
+.voice-overlay{
+  position:absolute; left:10px; top:44px; z-index:7;
+  background:rgba(0,0,0,.55); color:#fff; padding:2px 6px; border-radius:6px;
+  font-variant-numeric:tabular-nums; display:none;
+}
+</style>
+<script>
+(function(){
+  const OPT = (k, d) => { try{ const v = localStorage.getItem(STORE_PREFIX + 'opt12_' + k); return v==null?d:JSON.parse(v);}catch(_){ return d; } };
+  const SETOPT = (k, v) => { try{ localStorage.setItem(STORE_PREFIX + 'opt12_' + k, JSON.stringify(v)); }catch(_){ } };
+  const dayMs = 24*60*60*1000;
+
+  // ---- Version bump ----
+  try{
+    document.title = 'オセロ暗記トレーナー v12（音声入力/今日のメニュー/タグ一括/表示中エクスポート/誤答復習/SRS評価）';
+    const h1 = document.querySelector('h1');
+    if(h1) h1.textContent = 'オセロ暗記トレーナー v12';
+  }catch(_){}
+
+  // ---- Topbar: 今日のメニュー & 音声入力 ----
+  (function(){
+    const topbar = document.querySelector('.topbar');
+    if(!topbar) return;
+    if(!document.getElementById('todayBtn')){
+      const b = document.createElement('button'); b.id='todayBtn'; b.className='ghost'; b.textContent='今日のメニュー';
+      b.addEventListener('click', buildTodayPlaylist);
+      topbar.appendChild(b);
+    }
+    if(!document.getElementById('voiceBtn')){
+      const b = document.createElement('button'); b.id='voiceBtn'; b.className='ghost'; b.textContent='🎤 音声入力 OFF';
+      b.addEventListener('click', toggleVoice);
+      topbar.appendChild(b);
+    }
+  })();
+
+  function buildTodayPlaylist(){
+    try{
+      const pk = currentPath();
+      const enabledArr = (typeof getEnabledArrCurrent==='function') ? getEnabledArrCurrent() : (store.kifuByPath[pk]||[]).filter(k=>k.enabled!==false);
+      if(!enabledArr.length){ alert('出題オンの棋譜がありません'); return; }
+      const N = parseInt(prompt('今日のメニューの件数（既定：20）', String(OPT('todayN', 20)))||'0', 10) || OPT('todayN', 20);
+      SETOPT('todayN', N);
+      const nowT = Date.now();
+      const idSet = new Set(); const out = [];
+      const due = enabledArr.filter(k => (k.srsDue||0) <= nowT).sort((a,b)=> (a.srsDue||0) - (b.srsDue||0));
+      const unsolved = enabledArr.filter(k => !isCleared(k));
+      const hard = enabledArr.slice().sort((a,b)=>{
+        const ra=(a.stats?.mistakes||0)/Math.max(1,(a.stats?.attempts||0));
+        const rb=(b.stats?.mistakes||0)/Math.max(1,(b.stats?.attempts||0));
+        if(rb!==ra) return rb-ra;
+        return (b.stats?.mistakes||0)-(a.stats?.mistakes||0);
+      });
+      function pushList(list){
+        for(const k of list){
+          if(out.length>=N) break;
+          if(k && !idSet.has(k.id)){ idSet.add(k.id); out.push(k.id); }
+        }
+      }
+      pushList(due); pushList(unsolved); pushList(hard);
+      if(!out.length){ alert('対象が見つかりませんでした'); return; }
+      store.queueByPath[pk] = out; saveStore(store); updateQueueView();
+      try{ const sel = document.getElementById('pickMode'); if(sel) sel.value='QUEUE'; }catch(_){}
+      showToast('今日のメニューをキューに作成しました（' + out.length + '件）');
+    }catch(e){ alert('今日のメニュー作成でエラーが発生しました'); }
+  }
+
+  // ---- 音声入力（ja-JP） ----
+  let _rec = null, _voiceOn = false, _voiceTimer = null;
+  function toggleVoice(){ if(_voiceOn) stopVoice(); else startVoice(); }
+  function startVoice(){
+    try{
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if(!SR){ alert('このブラウザは音声認識に対応していません'); return; }
+      stopVoice();
+      _rec = new SR(); _rec.lang='ja-JP'; _rec.continuous=true; _rec.interimResults=false;
+      _rec.onresult = (ev)=>{
+        for(let i=ev.resultIndex;i<ev.results.length;i++){
+          const tx = (ev.results[i] && ev.results[i][0] && ev.results[i][0].transcript) ? ev.results[i][0].transcript.trim() : '';
+          if(!tx) continue;
+          const coord = parseSpeechToCoord(tx);
+          if(coord){
+            const cell = document.querySelector('.cell[data-coord="'+coord+'"]');
+            if(cell){ cell.click(); showVoice(tx + ' → ' + coord); }
+            else { showVoice(tx + ' → ?'); }
+          }else{
+            showVoice(tx);
+          }
+        }
+      };
+      _rec.onerror = ()=>{};
+      _rec.onend = ()=>{ if(_voiceOn){ try{ _rec.start(); }catch(_){ _voiceOn=false; updateVoiceBtn(); } } };
+      _rec.start(); _voiceOn = true; updateVoiceBtn();
+    }catch(e){ alert('音声入力の開始に失敗しました'); }
+  }
+  function stopVoice(){
+    try{ if(_rec){ try{ _rec.onend=null; _rec.stop(); }catch(_){ } } }catch(_){}
+    _rec = null; _voiceOn = false; updateVoiceBtn(); hideVoice();
+    if(_voiceTimer){ clearTimeout(_voiceTimer); _voiceTimer=null; }
+  }
+  function updateVoiceBtn(){ const b=document.getElementById('voiceBtn'); if(b) b.textContent = _voiceOn ? '🎤 音声入力 ON' : '🎤 音声入力 OFF'; }
+  function showVoice(txt){
+    let o=document.getElementById('voiceOverlay');
+    if(!o){ o=document.createElement('div'); o.id='voiceOverlay'; o.className='voice-overlay'; const wrap=document.getElementById('boardWrap'); if(wrap) wrap.appendChild(o); }
+    o.textContent = '🎤 ' + String(txt||''); o.style.display='inline-block';
+    if(_voiceTimer) clearTimeout(_voiceTimer);
+    _voiceTimer = setTimeout(()=>{ if(o) o.style.display='none'; }, 1600);
+  }
+  function hideVoice(){ const o=document.getElementById('voiceOverlay'); if(o) o.style.display='none'; }
+  window.addEventListener('beforeunload', stopVoice, {capture:true});
+
+  function parseSpeechToCoord(text){
+    const t = String(text||'').trim().toUpperCase();
+    const direct = t.match(/([A-H])[^\d]*([1-8])/);
+    if(direct){ return direct[1] + direct[2]; }
+    // Japanese numerals and letter names
+    const mapNum = {'イチ':'1','一':'1','１':'1','1':'1','ニ':'2','二':'2','２':'2','2':'2','サン':'3','三':'3','３':'3','3':'3','ヨン':'4','シ':'4','四':'4','４':'4','4':'4','ゴ':'5','五':'5','５':'5','5':'5','ロク':'6','六':'6','６':'6','6':'6','ナナ':'7','シチ':'7','七':'7','７':'7','7':'7','ハチ':'8','八':'8','８':'8','8':'8'};
+    const mapLetter = {'エー':'A','エイ':'A','Ａ':'A','A':'A','ビー':'B','ビィ':'B','Ｂ':'B','B':'B','シー':'C','スィー':'C','Ｃ':'C','C':'C','ディー':'D','デー':'D','Ｄ':'D','D':'D','イー':'E','Ｅ':'E','E':'E','エフ':'F','Ｆ':'F','F':'F','ジー':'G','Ｇ':'G','G':'G','エイチ':'H','エッチ':'H','Ｈ':'H','H':'H'};
+    const parts = t.split(/[\s、。・,，\.]+/).filter(Boolean);
+    let L=null,N=null;
+    for(const p of parts){
+      if(L==null){
+        const m = p.match(/[A-HＡ-Ｈ]/);
+        if(m){ L = String(m[0]).replace('Ａ','A').replace('Ｂ','B').replace('Ｃ','C').replace('Ｄ','D').replace('Ｅ','E').replace('Ｆ','F').replace('Ｇ','G').replace('Ｈ','H'); }
+        if(!L){
+          for(const k in mapLetter){ if(p.includes(k)){ L = mapLetter[k]; break; } }
+        }
+      }
+      if(N==null){
+        const m2 = p.match(/[1-8１-８]/);
+        if(m2){ N = String(m2[0]).replace('１','1').replace('２','2').replace('３','3').replace('４','4').replace('５','5').replace('６','6').replace('７','7').replace('８','8'); }
+        if(!N){
+          for(const k in mapNum){ if(p.includes(k)){ N = mapNum[k]; break; } }
+        }
+      }
+    }
+    if(L && N) return L + N;
+    return null;
+  }
+
+  // ---- キュー：誤答復習キュー作成 ----
+  (function(){
+    try{
+      const cards = document.querySelectorAll('.dockGrid .card');
+      const queueCard = cards && cards[1] ? cards[1] : null;
+      if(!queueCard) return;
+      if(!document.getElementById('reviewCreateBtn')){
+        const row = document.createElement('div'); row.className='row wrap';
+        const btn = document.createElement('button'); btn.id='reviewCreateBtn'; btn.className='ghost'; btn.textContent='誤答復習キュー作成';
+        row.appendChild(btn);
+        queueCard.appendChild(row);
+        btn.addEventListener('click', ()=>{
+          try{
+            const pk = currentPath();
+            const enabledArr = (typeof getEnabledArrCurrent==='function') ? getEnabledArrCurrent() : (store.kifuByPath[pk]||[]).filter(k=>k.enabled!==false);
+            if(!enabledArr.length){ alert('出題オンの棋譜がありません'); return; }
+            const N = parseInt(prompt('上位いくつ入れますか？（既定：20）', String(OPT('reviewN', 20)))||'0', 10) || OPT('reviewN', 20);
+            SETOPT('reviewN', N);
+            const ranked = enabledArr.filter(k => (k.stats?.mistakes||0)>0).sort((a,b)=>{
+              const ra=(a.stats?.mistakes||0)/Math.max(1,(a.stats?.attempts||0));
+              const rb=(b.stats?.mistakes||0)/Math.max(1,(b.stats?.attempts||0));
+              if(rb!==ra) return rb-ra;
+              return (b.stats?.mistakes||0)-(a.stats?.mistakes||0);
+            });
+            const ids = ranked.slice(0, N).map(k=>k.id);
+            if(!ids.length){ alert('誤答のある問題がありません'); return; }
+            store.queueByPath[pk] = ids; saveStore(store); updateQueueView();
+            try{ const sel=document.getElementById('pickMode'); if(sel) sel.value='QUEUE'; }catch(_){}
+            showToast('誤答復習キューを作成しました（' + ids.length + '件）');
+          }catch(e){ alert('処理中にエラーが発生しました'); }
+        });
+      }
+    }catch(_){}
+  })();
+
+  // ---- KIFU一覧：タグ一括 & 表示中エクスポート ----
+  (function(){
+    function ensureButtons(){
+      const hdr = document.querySelector('#kifuModal .klist-controls');
+      if(!hdr) return;
+      let box = document.getElementById('bulkOps');
+      if(!box){
+        box = document.createElement('span'); box.id='bulkOps';
+        box.style.display='inline-flex'; box.style.gap='6px'; box.style.flexWrap='wrap'; box.style.marginLeft='8px';
+        hdr.appendChild(box);
+      }
+      function addBtn(id, text, handler){
+        if(document.getElementById(id)) return;
+        const b = document.createElement('button'); b.id=id; b.className='ghost tiny'; b.textContent=text;
+        b.addEventListener('click', handler); box.appendChild(b);
+      }
+      function currentFiltered(){ const pk=currentPath(); const arr=getSortedArray(pk); return { pk, arr }; }
+      addBtn('bulkTagAddBtn', '表示中→タグ追加', ()=>{
+        const raw = prompt('追加するタグ（空白/カンマ区切り）', '');
+        if(!raw) return;
+        const tags = raw.split(/[,\s]+/).map(s=>s.trim()).filter(Boolean);
+        const { pk, arr } = currentFiltered();
+        arr.forEach(k=>{ const set = new Set(k.tags||[]); tags.forEach(t=>set.add(t)); k.tags=Array.from(set); });
+        saveStore(store); try{ renderKifuList(); }catch(_){}
+        showToast('タグを追加しました');
+      });
+      addBtn('bulkTagDelBtn', '表示中→タグ削除', ()=>{
+        const raw = prompt('削除するタグ（空白/カンマ区切り）', '');
+        if(!raw) return;
+        const del = new Set(raw.split(/[,\s]+/).map(s=>s.trim()).filter(Boolean));
+        const { pk, arr } = currentFiltered();
+        arr.forEach(k=>{ k.tags=(k.tags||[]).filter(t=>!del.has(t)); });
+        saveStore(store); try{ renderKifuList(); }catch(_){}
+        showToast('タグを削除しました');
+      });
+      addBtn('exportFilteredBtn', 'エクスポート（表示中）', ()=>{
+        const { pk, arr } = currentFiltered();
+        if(!arr.length){ alert('対象がありません'); return; }
+        const payload = {
+          type:'reversi_trainer_filtered_export_v1',
+          exportedAt: new Date().toISOString(),
+          path: pk,
+          filter: {
+            text: (document.getElementById('searchInput')?.value||''),
+            tags: (window._v8TagFilter?.words||[]),
+            or: (window._v8TagFilter?.or||false)
+          },
+          kifu: arr,
+          queue: getQueueByPath(pk)
+        };
+        const blob = new Blob([JSON.stringify(payload,null,2)], {type:'application/json'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href=url; a.download=(pk.replaceAll('/','__')||'folder')+'_filtered_export.json';
+        document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 1000);
+      });
+    }
+    if(typeof window.openKifuModal==='function'){
+      const orig = window.openKifuModal;
+      window.openKifuModal = function(){ orig(); setTimeout(ensureButtons, 0); };
+    }else{
+      ensureButtons();
+    }
+  })();
+
+  // ---- SRS評価（SM-2方式の0-5ボタン） ----
+  (function(){
+    function updateSrsSM2(k, q){
+      try{
+        k.srsEF = (typeof k.srsEF==='number' && isFinite(k.srsEF)) ? k.srsEF : 2.5;
+        k.srsReps = (k.srsReps|0);
+        k.srsIntervalDays = (k.srsIntervalDays|0) || 0;
+        if(q < 3){
+          k.srsReps = 0;
+          k.srsIntervalDays = 1;
+        }else{
+          if(k.srsReps === 0){ k.srsIntervalDays = 1; }
+          else if(k.srsReps === 1){ k.srsIntervalDays = 6; }
+          else { k.srsIntervalDays = Math.max(1, Math.round(k.srsIntervalDays * k.srsEF)); }
+          k.srsReps += 1;
+          k.srsEF = k.srsEF + (0.1 - (5 - q)*(0.08 + (5 - q)*0.02));
+          if(k.srsEF < 1.3) k.srsEF = 1.3;
+        }
+        k.srsDue = Date.now() + Math.max(1, k.srsIntervalDays)*dayMs;
+        k.srsAlgo = 'SM2';
+      }catch(_){}
+    }
+    if(typeof window.showCelebrate==='function' && !window._v12_srs_patched){
+      const orig = window.showCelebrate;
+      window.showCelebrate = function(total, mistakes){
+        const out = orig(total, mistakes);
+        try{
+          const box = document.getElementById('resultInfo');
+          if(!box) return out;
+          let row = document.getElementById('srsRatingRow');
+          if(row) row.remove();
+          row = document.createElement('div'); row.className='field'; row.id='srsRatingRow';
+          const lab = document.createElement('label'); lab.className='small'; lab.textContent='SRS評価（0=忘れた〜5=余裕）';
+          const btns = document.createElement('div'); btns.className='row wrap';
+          for(let q=0;q<=5;q++){
+            const b=document.createElement('button'); b.className='ghost tiny'; b.textContent=String(q);
+            b.addEventListener('click', ()=>{
+              try{
+                const pk=currentPath(); const arr=store.kifuByPath[pk]||[]; const k=arr.find(x=>x.id===currentKifuId); if(!k) return;
+                updateSrsSM2(k, q); saveStore(store);
+                showToast('SRSを更新しました（評価 ' + q + '）');
+                try{ if(window.updateSrsDueCount) window.updateSrsDueCount(); if(window._v10_computeGlobalSrsDue) window._v10_computeGlobalSrsDue(); }catch(_){}
+              }catch(_){}
+            });
+            btns.appendChild(b);
+          }
+          row.appendChild(lab); row.appendChild(btns);
+          box.appendChild(row);
+        }catch(_){}
+        return out;
+      };
+      window._v12_srs_patched = true;
+    }
+  })();
+
+})(); // end v12
+</script>
+
+
+<!-- ===== v13 Addons by ChatGPT (2025-10-19) ===== -->
+<style>
+/* v13: focus mode and small UI tweaks */
+body.focus-only .grid > .panel:first-child{ display:none; }
+body.focus-only .dockGrid{ display:none; }
+body.focus-only #boardWrap{ box-shadow: 0 0 0 3px #8ab4ff inset; }
+.topbar .ghost.tiny{ font-size: 0.80rem; padding: 2px 8px; }
+</style>
+<script>
+(function(){
+  try{
+    document.title = 'オセロ暗記トレーナー v13（ストリーク/Undo/集中/手動PASS/重複検出/共有/ホットキー強化/今日の進捗）';
+    const h1 = document.querySelector('h1'); if(h1) h1.textContent = 'オセロ暗記トレーナー v13';
+  }catch(_){}
+
+  const topbar = document.querySelector('.topbar');
+  if(topbar){
+    function mkBtn(id, text){ if(document.getElementById(id)) return document.getElementById(id); const b=document.createElement('button'); b.id=id; b.className='ghost tiny'; b.textContent=text; topbar.appendChild(b); return b; }
+    const focusBtn = mkBtn('focusBtn','集中モード'); focusBtn.addEventListener('click', ()=>{ document.body.classList.toggle('focus-only'); focusBtn.textContent = document.body.classList.contains('focus-only') ? '通常表示' : '集中モード'; });
+    const dupBtn = mkBtn('dupBtn','重複チェック'); dupBtn.addEventListener('click', showDupReport);
+    const shareBtn = mkBtn('shareBtn','共有（今の問題）'); shareBtn.addEventListener('click', shareCurrentKifu);
+    if(!document.getElementById('streakStat')){
+      const span = document.createElement('span'); span.className = 'stat'; span.id='streakStat'; span.innerHTML='🔥 連続：<b id="streakDays">0</b>日｜本日：<b id="todaySolved">0</b>';
+      topbar.appendChild(span); updateStreak();
+    }
+  }
+
+  function getLogs(){ try{ return JSON.parse(localStorage.getItem(STORE_PREFIX+'opt10_logs')||'[]'); }catch(_){ return []; } }
+  function dateKey(d){ const y=d.getFullYear(); const m=String(d.getMonth()+1).padStart(2,'0'); const dd=String(d.getDate()).padStart(2,'0'); return y+'-'+m+'-'+dd; }
+  function updateStreak(){
+    try{
+      const logs = getLogs().filter(r => r && r.solved);
+      const map = {}; logs.forEach(r => { if(r.timestamp){ const day = String(r.timestamp).slice(0,10); map[day] = (map[day]||0) + 1; } });
+      const today = new Date(); const todayKey = dateKey(today);
+      const todayCnt = map[todayKey]||0;
+      let streak = 0;
+      for(let i=0;i<3650;i++){
+        const d = new Date(); d.setDate(today.getDate()-i);
+        const k = dateKey(d);
+        if(map[k]>0) streak++; else break;
+      }
+      const el1=document.getElementById('streakDays'); const el2=document.getElementById('todaySolved');
+      if(el1) el1.textContent=String(streak);
+      if(el2) el2.textContent=String(todayCnt);
+    }catch(_){}
+  }
+  window._v13_updateStreak = updateStreak;
+
+  function undoOne(){
+    try{
+      if(!window.training) return;
+      const newIdx = Math.max((window.rangeStart||1)-1, (window.moveIndex||0)-1);
+      if(newIdx === window.moveIndex) return;
+      window.setPositionByTokenIndex(newIdx);
+      window.training = true;
+      window.setStatus('1手戻しました（' + (newIdx+1) + '手目）');
+      window.renderBoard(); window.setProgress();
+    }catch(_){}
+  }
+  window.addEventListener('keydown', (e)=>{
+    const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+    if(tag==='input' || tag==='textarea' || tag==='select') return;
+    if(e.key==='u' || e.key==='U'){ e.preventDefault(); undoOne(); }
+    else if(e.key==='Backspace'){ try{ if(!window._kbdBuf){ e.preventDefault(); undoOne(); } }catch(_){ e.preventDefault(); undoOne(); } }
+    else if(e.key==='p' || e.key==='P'){ try{ manualPass(); }catch(_){} }
+  }, {capture:true});
+
+  (function(){
+    const cards = document.querySelectorAll('.dockGrid .card');
+    const settingsCard = cards && cards[0] ? cards[0] : null;
+    if(settingsCard && !document.getElementById('passBtn')){
+      const row = document.createElement('div'); row.className='row wrap';
+      const b = document.createElement('button'); b.id='passBtn'; b.className='ghost'; b.textContent='PASS';
+      b.title = '合法手がない時のみ有効';
+      b.addEventListener('click', manualPass);
+      row.appendChild(b); settingsCard.appendChild(row);
+    }
+  })();
+  function manualPass(){
+    try{
+      if(!window.training) return showToast('トレーニング中ではありません');
+      const LM = legalMoves(board, currentPlayer);
+      if(LM.length>0){ showToast('合法手があるためPASSできません'); return; }
+      const token = (window.expectedMoves && window.expectedMoves[window.moveIndex]) || null;
+      if(token!=='P' && token!=='PASS'){ showToast('この手番はPASS指定ではありません'); return; }
+      window.currentPlayer = -window.currentPlayer; window.moveIndex++;
+      window.setProgress(); window.renderBoard(); window.stepIfAIShouldPlay();
+    }catch(_){}
+  }
+
+  function showDupReport(){
+    try{
+      const sigMap = {}; const pathMap = {};
+      Object.entries(store.kifuByPath||{}).forEach(([pk, arr])=>{
+        (arr||[]).forEach((k, idx)=>{
+          const sig = k.sig || (k.moves?canonicalSignature(k.moves):'');
+          if(!sig) return;
+          if(!sigMap[sig]){ sigMap[sig] = []; }
+          sigMap[sig].push({pk, id:k.id, name:k.name||'', idx: (typeof k._idx==='number'?(k._idx+1):(idx+1))});
+        });
+      });
+      const dups = Object.entries(sigMap).filter(([, list])=> list.length>1);
+      if(!dups.length){ alert('重複は見つかりませんでした'); return; }
+      let msg = '重複が見つかりました：' + dups.length + '組\n\n';
+      dups.slice(0,50).forEach(([sig, list], i)=>{
+        msg += '--- #' + (i+1) + ' ---\n';
+        list.forEach(x=>{ msg += '  '+x.pk+'  #'+x.idx+'  '+(x.name||'（無名）')+'\n'; });
+        if(i===49 && dups.length>50) msg += '… ('+(dups.length-50)+' 組 省略)\n';
+      });
+      msg += '\n※ 同一小フォルダ内の重複を整理できます。';
+      if(confirm(msg + '\n\n表示中の小フォルダ内で、後ろにある重複を削除しますか？')){
+        const pk = currentPath();
+        const arr = store.kifuByPath[pk] || [];
+        const seen = new Set();
+        for(let i=0;i<arr.length;i++){
+          const sig = arr[i].sig; if(!sig){ continue; }
+          if(seen.has(sig)){ arr.splice(i,1); i--; }
+          else { seen.add(sig); }
+        }
+        arr.forEach((k,i)=> k._idx = i);
+        saveStore(store); updateCountsAndPath(); try{ renderKifuList(); }catch(_){}
+        alert('重複を整理しました');
+      }
+    }catch(e){ alert('重複チェックでエラーが発生しました'); }
+  }
+
+  async function shareCurrentKifu(){
+    try{
+      const pk = currentPath();
+      const arr = store.kifuByPath[pk] || [];
+      const k = arr.find(x=>x.id===currentKifuId);
+      if(!k){ alert('現在の問題がありません'); return; }
+      const payload = { type:'reversi_trainer_share_v1', path: pk, kifu: k };
+      const txt = JSON.stringify(payload, null, 2);
+      await navigator.clipboard.writeText(txt);
+      showToast('クリップボードに共有JSONをコピーしました');
+    }catch(e){ alert('共有に失敗しました'); }
+  }
+
+  if(typeof window.showCelebrate === 'function' && !window._v13_celebrate_patched){
+    const orig = window.showCelebrate;
+    window.showCelebrate = function(total, mistakes){
+      const out = orig(total, mistakes);
+      try{ updateStreak(); }catch(_){}
+      return out;
+    };
+    window._v13_celebrate_patched = true;
+  }
+
+})(); // end v13
+</script>
+
+
+<!-- ===== v14 Addons by ChatGPT (2025-10-19) ===== -->
+<style>
+/* v14: XP/Level, Achievements, Daily Missions, Share Card */
+.stat.xp { background:#fff8e1; border-color:#ffe0a3; }
+.xpwrap{ display:inline-flex; align-items:center; gap:8px; }
+.xpbar{ width:120px; height:6px; border-radius:999px; background:#f0f0f0; overflow:hidden; box-shadow:inset 0 0 0 1px rgba(0,0,0,0.06); }
+.xpbar .fill{ height:100%; width:0%; background:linear-gradient(90deg,#ffd54f,#ffb300); transition:width .4s ease; }
+.modal .grid-achi{ display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; }
+.achi-card{ border:1px solid #eee; border-radius:10px; padding:10px; background:#fff; display:grid; gap:4px; }
+body.theme-dark .achi-card{ background:#151a1f; border-color:#2a2f3a; }
+.achi-card.locked{ opacity:.55; }
+.achi-title{ font-weight:700; }
+.achi-desc{ font-size:.9rem; color:#666; }
+body.theme-dark .achi-desc{ color:#a9b2c3; }
+
+/* Daily mission modal */
+.mission-progress{ display:grid; gap:8px; }
+.mission-row{ display:grid; grid-template-columns: 140px 1fr auto; gap:10px; align-items:center; }
+.mbar{ height:8px; border-radius:999px; background:#e8f0ff; overflow:hidden; border:1px solid #d0defc; }
+.mbar .fill{ height:100%; width:0%; background:linear-gradient(90deg,#8ab4ff,#2563eb); transition:width .3s ease; }
+.badge{ display:inline-block; padding:2px 6px; border-radius:999px; font-size:.8rem; border:1px solid #ddd; background:#fafafa; }
+body.theme-dark .badge{ background:#1a2028; border-color:#2a2f3a; }
+
+/* Share-card toast */
+.share-tip{ font-size:.86rem; color:#666; }
+body.theme-dark .share-tip{ color:#a9b2c3; }
+</style>
+
+<script>
+(function(){
+  // ========= Helpers =========
+  if(typeof window.showToast!=='function'){ window.showToast = function(msg){ try{ console.log('[toast]', msg); }catch(_){ } }; }
+  const K = (k)=> STORE_PREFIX + 'opt14_' + k;
+  const JGET = (k,d)=>{ try{ const v=localStorage.getItem(K(k)); return v==null?d:JSON.parse(v);}catch(_){ return d; } };
+  const JSET = (k,v)=>{ try{ localStorage.setItem(K(k), JSON.stringify(v)); }catch(_){ } };
+  const now = ()=> Date.now();
+  const fmt2 = (n)=> String(n).padStart(2,'0');
+  function todayKey(){
+    const d = new Date();
+    return d.getFullYear()+'-'+fmt2(d.getMonth()+1)+'-'+fmt2(d.getDate());
+  }
+
+  // ========= XP / Level =========
+  const xpState = JGET('xpState', { level:1, xp:0, next:120 });
+  function xpToNext(lv){ return Math.round(120 + 80*Math.pow(1.12, Math.max(0, lv-1))); }
+  function ensureXpState(){
+    if(typeof xpState.level!=='number' || !isFinite(xpState.level)) xpState.level = 1;
+    if(typeof xpState.xp!=='number' || !isFinite(xpState.xp)) xpState.xp = 0;
+    if(typeof xpState.next!=='number' || !isFinite(xpState.next)) xpState.next = xpToNext(xpState.level);
+  }
+  ensureXpState();
+
+  // UI: topbar badge + progress
+  (function ensureTopbarXP(){
+    const topbar = document.querySelector('.topbar');
+    if(!topbar) return;
+    if(!document.getElementById('xpStat')){
+      const span = document.createElement('span'); span.className='stat xp'; span.id='xpStat';
+      span.innerHTML = '<span class="xpwrap">🎮 Lv <b id="lvNum">1</b> <span class="xpbar"><span id="xpFill" class="fill"></span></span> <span class="small" id="xpText">0/120</span></span>';
+      topbar.appendChild(span);
+    }
+    if(!document.getElementById('achiBtn')){
+      const b = document.createElement('button'); b.className='ghost tiny'; b.id='achiBtn'; b.textContent='実績';
+      b.addEventListener('click', openAchievements); topbar.appendChild(b);
+    }
+    if(!document.getElementById('missionBtn')){
+      const b = document.createElement('button'); b.className='ghost tiny'; b.id='missionBtn'; b.textContent='ミッション';
+      b.addEventListener('click', openMission); topbar.appendChild(b);
+    }
+    updateXpUI();
+  })();
+
+  function updateXpUI(){
+    try{
+      const lv = document.getElementById('lvNum');
+      const fill = document.getElementById('xpFill');
+      const text = document.getElementById('xpText');
+      if(lv) lv.textContent = String(xpState.level);
+      if(text) text.textContent = (Math.round(xpState.xp)) + '/' + xpState.next;
+      if(fill) fill.style.width = Math.min(100, 100*xpState.xp/Math.max(1,xpState.next)) + '%';
+    }catch(_){}
+  }
+
+  function grantXP(amount, reason){
+    try{
+      amount = Math.max(1, Math.round(amount));
+      xpState.xp += amount;
+      let leveled = false;
+      while(xpState.xp >= xpState.next){
+        xpState.xp -= xpState.next;
+        xpState.level += 1;
+        xpState.next = xpToNext(xpState.level);
+        leveled = true;
+      }
+      JSET('xpState', xpState);
+      updateXpUI();
+      showToast('XP +' + amount + (reason? ('｜' + reason):''));
+      if(leveled){
+        try{ speakJa && speakJa('レベルアップ'); }catch(_){}
+        try{
+          const cele = document.getElementById('celebrate');
+          if(cele){
+            const msg = document.getElementById('celebrateMsg');
+            const base = msg ? msg.textContent : '';
+            if(msg) msg.textContent = base + '｜🎉 Lv.' + xpState.level + ' !';
+          }
+        }catch(_){}
+      }
+      window._v14_lastXpGain = amount;
+    }catch(_){}
+  }
+
+  // ========= Achievements =========
+  const ACH = {
+    FIRST_CLEAR: { title:'初クリア', desc:'はじめてミスなしでクリア', icon:'🌱' },
+    TEN_NO_MISS:{ title:'完璧主義', desc:'ミスなしクリアを累計10回', icon:'🎯' },
+    SPEEDSTER:  { title:'スピードスター', desc:'12手以上の範囲を15秒以内でクリア', icon:'⚡' },
+    MARATHON:   { title:'ロングラン', desc:'40手以上をミスなしでクリア', icon:'🏁' },
+    NIGHT_OWL:  { title:'夜更かし', desc:'23:00〜05:00にミスなしでクリア', icon:'🌙' },
+    STREAK_7:   { title:'7日ストリーク', desc:'7日連続でクリア達成', icon:'🔥' },
+    DUE_MASTER: { title:'SRS消化職人', desc:'SRS期限の問題を1日に10件クリア', icon:'📆' },
+  };
+  function getAch(){ return JGET('ach', {}); }
+  function setAch(m){ JSET('ach', m||{}); }
+  function unlock(id){
+    const m = getAch();
+    if(m[id]) return false;
+    m[id] = { at: new Date().toISOString() };
+    setAch(m);
+    showToast('実績解除：' + (ACH[id]?.title||id));
+    try{ speakJa && speakJa('実績解除'); }catch(_){}
+    return true;
+  }
+  function countPerfectClears(){
+    try{
+      const logs = JSON.parse(localStorage.getItem(STORE_PREFIX+'opt10_logs')||'[]');
+      return logs.filter(r => r && r.solved && (r.mistakes|0)===0).length;
+    }catch(_){ return 0; }
+  }
+  function computeStreak(){
+    try{
+      const logs = JSON.parse(localStorage.getItem(STORE_PREFIX+'opt10_logs')||'[]');
+      const solvedDays = new Set();
+      (logs||[]).forEach(r => { if(r && r.solved && r.timestamp){ solvedDays.add(String(r.timestamp).slice(0,10)); } });
+      const d = new Date(); let streak = 0;
+      for(let i=0;i<3650;i++){
+        const t = new Date(d); t.setDate(d.getDate()-i);
+        const key = t.getFullYear()+'-'+fmt2(t.getMonth()+1)+'-'+fmt2(t.getDate());
+        if(solvedDays.has(key)) streak++; else break;
+      }
+      return streak;
+    }catch(_){ return 0; }
+  }
+
+  // Modal for achievements
+  function ensureAchModal(){
+    if(document.getElementById('achModal')) return;
+    const modal = document.createElement('div'); modal.className='modal'; modal.id='achModal';
+    modal.innerHTML = '<div class="window">\
+      <header><h3>実績</h3><button class="ghost" id="achCloseBtn">閉じる</button></header>\
+      <div class="body"><div id="achBody" class="grid-achi"></div></div>\
+      <div class="footer"><span class="small muted">ミスなし・速度・ストリークなどで解除されます。</span></div>\
+    </div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e)=>{ if(e.target===modal) modal.style.display='none'; });
+    modal.querySelector('#achCloseBtn').addEventListener('click', ()=> modal.style.display='none');
+  }
+  function openAchievements(){
+    ensureAchModal();
+    const modal = document.getElementById('achModal');
+    const body = document.getElementById('achBody');
+    const owned = getAch();
+    body.innerHTML='';
+    Object.keys(ACH).forEach(id=>{
+      const a = ACH[id];
+      const card = document.createElement('div'); card.className='achi-card' + (owned[id]?'':' locked');
+      const t = document.createElement('div'); t.className='achi-title'; t.textContent = (a.icon||'🏆') + ' ' + a.title;
+      const d = document.createElement('div'); d.className='achi-desc'; d.textContent = a.desc + (owned[id]? ('｜解除日：' + (owned[id].at||'')) : '');
+      card.appendChild(t); card.appendChild(d); body.appendChild(card);
+    });
+    modal.style.display='flex';
+  }
+
+  // ========= Daily Missions =========
+  function getMission(){
+    const key = 'mission_'+todayKey();
+    let m = JGET(key, null);
+    if(!m){
+      const dueCount = computeGlobalDue();
+      m = { createdAt: now(), goals:{ srs: Math.min(10, Math.max(3, dueCount)), unsolved: 3, any: 7 }, progress:{ srs:0, unsolved:0, any:0 }, done:false };
+      JSET(key, m);
+    }
+    return m;
+  }
+  function setMission(m){ JSET('mission_'+todayKey(), m); }
+  function computeGlobalDue(){
+    try{
+      const all = store && store.kifuByPath ? store.kifuByPath : {};
+      const t = Date.now();
+      let cnt = 0;
+      Object.values(all).forEach(arr => (arr||[]).forEach(k => { if(k && k.enabled!==false && typeof k.srsDue==='number' && k.srsDue <= t) cnt++; }));
+      return cnt;
+    }catch(_){ return 0; }
+  }
+  function ensureMissionModal(){
+    if(document.getElementById('missionModal')) return;
+    const modal = document.createElement('div'); modal.className='modal'; modal.id='missionModal';
+    modal.innerHTML = '<div class="window">\
+      <header><h3>デイリーミッション</h3><button class="ghost" id="missionCloseBtn">閉じる</button></header>\
+      <div class="body">\
+        <div id="missionBody" class="mission-progress"></div>\
+        <div class="small muted">「今日のメニュー」でキューに積むと進めやすいです。SRSは期限の問題を優先してカウントします。</div>\
+      </div>\
+      <div class="footer"><div class="row">\
+        <button class="ghost" id="missionRebuildBtn">今日のメニューを作る</button>\
+        <button class="ghost" id="missionResetBtn">本日のミッションを再生成</button>\
+      </div></div>\
+    </div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e)=>{ if(e.target===modal) modal.style.display='none'; });
+    modal.querySelector('#missionCloseBtn').addEventListener('click', ()=> modal.style.display='none');
+    const rebuild = modal.querySelector('#missionRebuildBtn');
+    if(rebuild) rebuild.addEventListener('click', ()=>{ try{ (window.buildTodayPlaylist||function(){ alert('v12の「今日のメニュー」機能が必要です'); })(); }catch(_){ } });
+    const reset = modal.querySelector('#missionResetBtn');
+    if(reset) reset.addEventListener('click', ()=>{ localStorage.removeItem(K('mission_'+todayKey())); openMission(true); });
+  }
+  function openMission(force){
+    ensureMissionModal();
+    if(force===true){ /* no-op */ }
+    const modal = document.getElementById('missionModal');
+    const body = document.getElementById('missionBody');
+    const m = getMission();
+    function row(label, key){
+      const g = m.goals[key], p = m.progress[key]||0;
+      const div = document.createElement('div'); div.className='mission-row';
+      const name = document.createElement('div'); name.innerHTML = '<span class="badge">' + (key==='srs'?'SRS':key==='unsolved'?'未クリア':'おまかせ') + '</span> ' + label;
+      const bar = document.createElement('div'); bar.className='mbar'; const fill = document.createElement('div'); fill.className='fill'; bar.appendChild(fill);
+      fill.style.width = (Math.min(100, 100*p/Math.max(1,g))) + '%';
+      const txt = document.createElement('div'); txt.className='small'; txt.textContent = p + ' / ' + g;
+      div.appendChild(name); div.appendChild(bar); div.appendChild(txt);
+      return div;
+    }
+    body.innerHTML='';
+    body.appendChild(row('期限のある問題を解く', 'srs'));
+    body.appendChild(row('未クリアの問題を新規クリア', 'unsolved'));
+    body.appendChild(row('その他の練習をこなす', 'any'));
+    modal.style.display='flex';
+    updateMissionBadge();
+  }
+  function updateMissionBadge(){
+    try{
+      const m = getMission();
+      const done = (m.progress.srs>=m.goals.srs) && (m.progress.unsolved>=m.goals.unsolved) && (m.progress.any>=m.goals.any);
+      const btn = document.getElementById('missionBtn');
+      if(btn){
+        const sum = Math.min(m.progress.srs, m.goals.srs) + Math.min(m.progress.unsolved, m.goals.unsolved) + Math.min(m.progress.any, m.goals.any);
+        const target = m.goals.srs + m.goals.unsolved + m.goals.any;
+        btn.textContent = 'ミッション ' + sum + '/' + target;
+      }
+      if(done && !m.done){
+        m.done = true; setMission(m);
+        grantXP(24, 'デイリーミッションクリア');
+        try{ speakJa && speakJa('デイリーミッション達成'); }catch(_){}
+      }
+    }catch(_){}
+  }
+
+  // Capture context at start to classify for mission
+  window._v14_ctx = { wasSrsDue:false, wasUnsolved:false };
+  if(typeof window.startTrainingCore === 'function' && !window._v14_start_wrap){
+    const orig = window.startTrainingCore;
+    window.startTrainingCore = function(picked){
+      try{
+        const pk = currentPath(); const arr = store.kifuByPath[pk] || [];
+        const k = arr.find(x=> x.id===picked.id);
+        window._v14_ctx.wasSrsDue = !!(k && typeof k.srsDue==='number' && k.srsDue <= Date.now());
+        window._v14_ctx.wasUnsolved = !!(k && !isCleared(k));
+      }catch(_){ window._v14_ctx.wasSrsDue=false; window._v14_ctx.wasUnsolved=false; }
+      return orig(picked);
+    };
+    window._v14_start_wrap = true;
+  }
+
+  // ========= Hook celebrate to award XP, achievements, mission =========
+  if(typeof window.showCelebrate === 'function' && !window._v14_celeb_wrap){
+    const origSC = window.showCelebrate;
+    window.showCelebrate = function(total, mistakes){
+      const out = origSC(total, mistakes);
+      try{
+        const ms = (window._v9 && _v9.timerStart) ? Math.max(0, Date.now() - _v9.timerStart) : null;
+        const sec = ms!=null ? ms/1000 : null;
+
+        // XP: base on length, quality, speed, SRS
+        let xp = 5 + Math.round(total/4);
+        if(mistakes===0) xp += 8;
+        if(sec!=null && sec <= Math.max(8, Math.ceil(total*0.9))) xp += 4; // speed bonus
+        const pk = currentPath(); const arr = store.kifuByPath[pk] || []; const k = arr.find(x=>x.id===currentKifuId);
+        if(k && typeof k.srsDue==='number' && k.srsDue <= Date.now()) xp += 6; // SRS due bonus
+        grantXP(xp, (mistakes===0?'ノーミス':'完了'));
+
+        // Coach tip
+        try{
+          const infoBox = document.getElementById('resultInfo');
+          if(infoBox && !document.getElementById('coachRow')){
+            const row = document.createElement('div'); row.className='field'; row.id='coachRow';
+            const lab = document.createElement('label'); lab.className='small'; lab.textContent='コーチから一言';
+            const p = document.createElement('div'); p.className='small muted';
+            let msg = 'いい流れ！この調子でいこう。';
+            if(mistakes===0 && sec!=null){ msg = (sec<total)?'速い！手のパターンが身体に入っています。':'安定感あり。次は少しだけスピードを意識。'; }
+            else if(mistakes>0){ msg = 'ミスは宝。ヒートマップの赤いマスを重点的に復習しよう。'; }
+            p.textContent = msg; row.appendChild(lab); row.appendChild(p); infoBox.appendChild(row);
+          }
+        }catch(_){}
+
+        // Achievements
+        try{
+          if(mistakes===0) unlock('FIRST_CLEAR');
+          if(mistakes===0 && countPerfectClears()>=10) unlock('TEN_NO_MISS');
+          if(mistakes===0 && total>=40) unlock('MARATHON');
+          if(mistakes===0 && sec!=null && total>=12 && sec<=15) unlock('SPEEDSTER');
+          const hour = (new Date()).getHours(); if(mistakes===0 && (hour>=23 || hour<5)) unlock('NIGHT_OWL');
+          if(computeStreak()>=7) unlock('STREAK_7');
+        }catch(_){}
+
+        // Mission progress
+        try{
+          const m = getMission();
+          if(mistakes===0){
+            if(window._v14_ctx.wasSrsDue) m.progress.srs = Math.min(m.goals.srs, (m.progress.srs||0)+1);
+            else if(window._v14_ctx.wasUnsolved) m.progress.unsolved = Math.min(m.goals.unsolved, (m.progress.unsolved||0)+1);
+            else m.progress.any = Math.min(m.goals.any, (m.progress.any||0)+1);
+            setMission(m);
+            updateMissionBadge();
+            // Sub goal reward thresholds
+            const r = [];
+            if(m.progress.srs===m.goals.srs) r.push('SRS');
+            if(m.progress.unsolved===m.goals.unsolved) r.push('未クリア');
+            if(m.progress.any===m.goals.any) r.push('おまかせ');
+            if(r.length){ grantXP(6, r.join('・')+' 完了'); }
+          }
+        }catch(_){}
+
+        // Add share image button
+        try{
+          const actions = document.querySelector('#celebrate .actions');
+          if(actions && !document.getElementById('shareCardBtn')){
+            const b = document.createElement('button'); b.id='shareCardBtn'; b.className='ghost'; b.textContent='シェア画像を保存';
+            b.addEventListener('click', saveShareCard);
+            actions.insertBefore(b, actions.firstChild);
+            const tip = document.createElement('div'); tip.className='share-tip'; tip.textContent='結果をSNS等に共有できる画像を生成します。';
+            actions.parentNode.appendChild(tip);
+          }
+        }catch(_){}
+
+      }catch(_){}
+      return out;
+    };
+    window._v14_celeb_wrap = true;
+  }
+
+  // ========= Share Card (PNG) =========
+  function saveShareCard(){
+    try{
+      const cell = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--cell')) || 56;
+      const gap = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--gap')) || 2;
+      const N = 8, boardSize = N*cell + (N-1)*gap;
+      const pad = 24, W = boardSize + pad*2, H = boardSize + 140;
+      const cvs = document.createElement('canvas'); cvs.width = W; cvs.height = H;
+      const ctx = cvs.getContext('2d');
+
+      // bg
+      ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg') || '#ffffff';
+      ctx.fillRect(0,0,W,H);
+
+      // title
+      ctx.fillStyle = '#111'; if(document.body.classList.contains('theme-dark')) ctx.fillStyle = '#e7ebf3';
+      ctx.font = 'bold 20px system-ui, -apple-system, Segoe UI, Roboto, Noto Sans JP, sans-serif';
+      ctx.fillText('オセロ暗記トレーナー v14', pad, 28);
+
+      // board draw (reuse simplified painter)
+      function drawBoard(x0, y0){
+        ctx.save(); ctx.translate(x0, y0);
+        ctx.fillStyle = '#0a5a2a'; ctx.fillRect(0,0,boardSize,boardSize);
+        for(let r=0;r<N;r++){
+          for(let c=0;c<N;c++){
+            const x = c*(cell+gap);
+            const y = r*(cell+gap);
+            ctx.fillStyle = '#1e7a3b';
+            const rad = 6, w=cell, h=cell;
+            ctx.beginPath();
+            ctx.moveTo(x+rad, y);
+            ctx.arcTo(x+w, y, x+w, y+h, rad);
+            ctx.arcTo(x+w, y+h, x, y+h, rad);
+            ctx.arcTo(x, y+h, x, y, rad);
+            ctx.arcTo(x, y, x+w, y, rad);
+            ctx.closePath(); ctx.fill();
+          }
+        }
+        for(let r=0;r<N;r++){
+          for(let c=0;c<N;c++){
+            const v = (window.board && board[r]) ? board[r][c] : 0;
+            if(!v) continue;
+            const x = c*(cell+gap) + cell/2;
+            const y = r*(cell+gap) + cell/2;
+            const radius = cell*0.41;
+            ctx.beginPath(); ctx.arc(x,y,radius,0,Math.PI*2);
+            ctx.fillStyle = (v===1) ? '#111' : '#eee'; ctx.fill();
+            ctx.globalAlpha = 0.15;
+            ctx.beginPath(); ctx.arc(x - radius*0.35, y - radius*0.35, radius*0.65, 0, Math.PI*2);
+            ctx.fillStyle = '#fff'; ctx.fill(); ctx.globalAlpha = 1;
+          }
+        }
+        ctx.restore();
+      }
+      drawBoard(pad, 44);
+
+      // meta
+      const ms = (window._v9 && _v9.timerStart) ? Math.max(0, Date.now() - _v9.timerStart) : null;
+      const sec = ms!=null ? (ms/1000).toFixed(2)+'s' : '—';
+      const total = Math.max(0, (window.rangeEnd||0) - (window.rangeStart||1) + 1);
+      const mistakes = (typeof window.sessionMistakes==='number') ? window.sessionMistakes : 0;
+      const xp = window._v14_lastXpGain || 0;
+
+      ctx.font = '14px system-ui, -apple-system, Segoe UI, Roboto, Noto Sans JP, sans-serif';
+      ctx.fillText('範囲：' + (window.rangeStart||1) + '〜' + (window.rangeEnd||0) + '（全' + total + '手）', pad, H - 86);
+      ctx.fillText('誤答：' + mistakes + '回', pad, H - 66);
+      ctx.fillText('タイム：' + sec, pad, H - 46);
+      ctx.fillText('XP +' + xp + ' ｜ Lv.' + (JGET('xpState', xpState).level||1), pad, H - 26);
+
+      const url = cvs.toDataURL('image/png');
+      const a = document.createElement('a'); a.href=url;
+      const dt = new Date();
+      const y = dt.getFullYear(), m = String(dt.getMonth()+1).padStart(2,'0'), d=String(dt.getDate()).padStart(2,'0');
+      a.download = 'reversi_share_'+y+m+d+'.png';
+      document.body.appendChild(a); a.click(); a.remove();
+    }catch(e){ alert('シェア画像の生成に失敗しました'); }
+  }
+
+  // ========= Tag mastery injected into Stats =========
+  function injectTagMastery(){
+    try{
+      const modal = document.getElementById('statsModal');
+      if(!modal || modal.style.display!=='flex') return;
+      const body = document.getElementById('statsBody');
+      if(!body || document.getElementById('tagMasteryBox')) return;
+      const pk = currentPath(); const arr = store.kifuByPath[pk] || [];
+      const map = {}; // tag -> {attempts, solved, mistakes}
+      arr.forEach(k => {
+        const tags = (k.tags||[]);
+        const st = k.stats||{};
+        tags.forEach(t => {
+          const o = map[t] || (map[t] = {attempts:0, solved:0, mistakes:0, count:0});
+          o.attempts += (st.attempts||0);
+          o.solved += (st.solved||0);
+          o.mistakes += (st.mistakes||0);
+          o.count += 1;
+        });
+      });
+      const tags = Object.keys(map);
+      if(!tags.length) return;
+      const box = document.createElement('div'); box.id='tagMasteryBox'; box.className='field';
+      box.innerHTML = '<b>タグ別マスタリー</b>';
+      tags.sort((a,b)=> (map[b].solved/Math.max(1,map[b].attempts)) - (map[a].solved/Math.max(1,map[a].attempts)));
+      tags.slice(0,12).forEach(t => {
+        const o=map[t]; const rate = o.attempts? ((o.solved/o.attempts*100).toFixed(0)+'%') : '—';
+        const row = document.createElement('div'); row.className='small';
+        const medal = o.solved>=20 ? '🥇' : o.solved>=10 ? '🥈' : o.solved>=5 ? '🥉' : '▫️';
+        row.textContent = medal + ' #' + t + '｜正解率 ' + rate + '｜試行 ' + o.attempts + '｜正解 ' + o.solved + '｜問題数 ' + o.count;
+        box.appendChild(row);
+      });
+      body.appendChild(box);
+    }catch(_){}
+  }
+  // hook the "統計" button to inject after open
+  (function hookStatsButton(){
+    const btn = document.getElementById('openStatsBtn');
+    if(btn && !btn.dataset.v14){
+      btn.dataset.v14='1';
+      btn.addEventListener('click', ()=> setTimeout(injectTagMastery, 120), {capture:true});
+    }
+  })();
+
+  // ========= Title bump to v14 =========
+  try{
+    document.title = 'オセロ暗記トレーナー v14（XP/実績/ミッション/シェア/タグ熟達）';
+    const h1 = document.querySelector('h1');
+    if(h1) h1.textContent = 'オセロ暗記トレーナー v14';
+  }catch(_){}
+
+  // Initial update
+  updateXpUI();
+  updateMissionBadge();
+
+})(); // end v14
+</script>
+
+
+<!-- ===== v15 Addons by ChatGPT (2025-10-19) ===== -->
+<style>
+/* v15: calendar, weekly challenge, freeze */
+.cal-modal .window{ width:min(960px,94vw); }
+.cal-wrap{ display:grid; gap:10px; }
+.cal-grid{ display:grid; grid-template-columns: 24px repeat(20, 12px); gap:4px 3px; align-items:center; }
+.cal-week{ font-size:.78rem; color:#666; }
+body.theme-dark .cal-week{ color:#a9b2c3; }
+.cal-cell{ width:12px; height:12px; border-radius:3px; background:#eee; }
+body.theme-dark .cal-cell{ background:#272d36; }
+.cal-legend{ display:flex; gap:8px; align-items:center; font-size:.82rem; color:#666; }
+body.theme-dark .cal-legend{ color:#a9b2c3; }
+.cal-legend .cal-cell{ width:14px; height:14px; }
+.challenge-modal .window{ width:min(700px,94vw); }
+.challenge-row{ display:grid; gap:6px; }
+.challenge-meta{ font-size:.9rem; color:#666; }
+body.theme-dark .challenge-meta{ color:#a9b2c3; }
+.challenge-score{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.badge.small{ padding:2px 6px; font-size:.78rem; border:1px solid #ddd; border-radius:999px; background:#fafafa; }
+body.theme-dark .badge.small{ background:#1a2028; border-color:#2a2f3a; }
+.freeze-modal .window{ width:min(520px, 92vw); }
+</style>
+<script>
+(function(){
+  // ---- helpers ----
+  const K = (k)=> STORE_PREFIX + 'opt15_' + k;
+  const JGET = (k,d)=>{ try{ const v=localStorage.getItem(K(k)); return v==null?d:JSON.parse(v);}catch(_){ return d; } };
+  const JSET = (k,v)=>{ try{ localStorage.setItem(K(k), JSON.stringify(v)); }catch(_){ } };
+  function getLogs(){ try{ return JSON.parse(localStorage.getItem(STORE_PREFIX+'opt10_logs')||'[]'); }catch(_){ return []; } }
+  function dayKey(d){ const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), dd=String(d.getDate()).padStart(2,'0'); return y+'-'+m+'-'+dd; }
+  function isoWeekKey(dt){
+    const d = new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()));
+    const dayNum = d.getUTCDay() || 7; d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
+    const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1)/7);
+    return d.getUTCFullYear() + '-W' + String(weekNo).padStart(2,'0');
+  }
+  function seedRnd(seedStr){
+    let h=0; for(let i=0;i<seedStr.length;i++){ h = (h*31 + seedStr.charCodeAt(i))>>>0; }
+    return function(){ h = (h*1664525 + 1013904223)>>>0; return h/4294967296; };
+  }
+  function pickEnabledCurrent(){
+    const pk = currentPath();
+    const arr = (store.kifuByPath[pk]||[]).filter(k=>k.enabled!==false);
+    return arr.map(k=>k.id);
+  }
+
+  // ---- Topbar buttons (Calendar / Challenge / Freeze / Pomodoro placeholder created in v16) ----
+  (function ensureBtns(){
+    const bar=document.querySelector('.topbar');
+    if(!bar) return;
+    function add(id, text, fn){
+      if(document.getElementById(id)) return;
+      const b=document.createElement('button'); b.id=id; b.className='ghost tiny'; b.textContent=text; b.addEventListener('click', fn);
+      bar.appendChild(b);
+    }
+    add('calendarBtn','カレンダー', openCalendar);
+    add('challengeBtn','チャレンジ', openChallenge);
+    add('freezeBtn','フリーズ', openFreeze);
+  })();
+
+  // ---- Calendar modal ----
+  function ensureCalModal(){
+    if(document.getElementById('calendarModal')) return;
+    const modal = document.createElement('div'); modal.className='modal cal-modal'; modal.id='calendarModal';
+    modal.innerHTML = '<div class="window">      <header><h3>貢献カレンダー</h3><button class="ghost" id="calClose">閉じる</button></header>      <div class="body"><div class="cal-wrap">        <div class="cal-legend">過去20週の達成状況：<span class="cal-cell" style="background:#e2e8f0"></span>0<span class="cal-cell" style="background:#c7d2fe"></span>1<span class="cal-cell" style="background:#a5b4fc"></span>2<span class="cal-cell" style="background:#818cf8"></span>3<span class="cal-cell" style="background:#6366f1"></span>4+ </div>        <div id="calGrid" class="cal-grid"></div>      </div></div>      <div class="footer"><span class="small muted">各マスは1日のミスなしクリア件数（ログ基準）</span></div>    </div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e)=>{ if(e.target===modal) modal.style.display='none'; });
+    modal.querySelector('#calClose').addEventListener('click', ()=> modal.style.display='none');
+  }
+  function openCalendar(){
+    ensureCalModal();
+    const modal = document.getElementById('calendarModal');
+    const grid = document.getElementById('calGrid');
+    const logs = getLogs().filter(r=>r && r.solved);
+    const count = {}; logs.forEach(r=>{ const day=String(r.timestamp).slice(0,10); count[day] = (count[day]||0) + 1; });
+    grid.innerHTML='';
+    const today = new Date();
+    // start from Monday of 19 weeks ago
+    const start = new Date(today); start.setDate(today.getDate() - 7*19);
+    // align to Monday
+    const wd = (start.getDay()||7); start.setDate(start.getDate() - (wd-1));
+    for(let week=0; week<20; week++){
+      const weekLabel = document.createElement('div'); weekLabel.className='cal-week';
+      const ref = new Date(start); ref.setDate(start.getDate() + week*7);
+      const k = isoWeekKey(ref).replace('W','週');
+      weekLabel.textContent = k;
+      grid.appendChild(weekLabel);
+      for(let d=0; d<7; d++){
+        const dt = new Date(ref); dt.setDate(ref.getDate()+d);
+        if(dt > today){ const cell=document.createElement('div'); cell.className='cal-cell'; cell.style.opacity='.3'; grid.appendChild(cell); continue; }
+        const key = dayKey(dt);
+        const n = count[key]||0;
+        const cell = document.createElement('div'); cell.className='cal-cell'; cell.title = key + '：' + n + '件';
+        let color = '#e2e8f0';
+        if(n>=4) color = '#6366f1';
+        else if(n===3) color = '#818cf8';
+        else if(n===2) color = '#a5b4fc';
+        else if(n===1) color = '#c7d2fe';
+        else color = '#e2e8f0';
+        cell.style.background = color;
+        grid.appendChild(cell);
+      }
+    }
+    modal.style.display='flex';
+  }
+
+  // ---- Streak Freeze ----
+  function openFreeze(){
+    ensureFreezeModal();
+    refreshFreezeUI();
+    document.getElementById('freezeModal').style.display='flex';
+  }
+  function ensureFreezeModal(){
+    if(document.getElementById('freezeModal')) return;
+    const modal = document.createElement('div'); modal.className='modal freeze-modal'; modal.id='freezeModal';
+    modal.innerHTML = '<div class="window">      <header><h3>ストリーク・フリーズ</h3><button class="ghost" id="freezeClose">閉じる</button></header>      <div class="body">        <div class="field">          <div class="small muted">「フリーズ」を使うと、その日を1回だけ“練習した日”としてカウントできます（週に1回まで）。忙しい日でもストリークを守ろう！</div>        </div>        <div class="field"><div id="freezeStatus" class="challenge-meta">—</div></div>        <div class="row wrap">          <button class="ghost" id="freezeYesterdayBtn">前日をフリーズ</button>          <button class="ghost" id="freezeTodayBtn">今日をフリーズ</button>        </div>      </div>      <div class="footer"><span class="small muted">フリーズの使用履歴はローカルに保存されます。</span></div>    </div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e)=>{ if(e.target===modal) modal.style.display='none'; });
+    modal.querySelector('#freezeClose').addEventListener('click', ()=> modal.style.display='none');
+    modal.querySelector('#freezeYesterdayBtn').addEventListener('click', ()=> useFreeze(-1));
+    modal.querySelector('#freezeTodayBtn').addEventListener('click', ()=> useFreeze(0));
+  }
+  function getFreezeDays(){ return JGET('freezeDays', []); }
+  function setFreezeDays(a){ JSET('freezeDays', a||[]); }
+  function weekBudgetKey(wk){ return 'freezeBudget_'+wk; }
+  function getWeekBudget(wk){ return JGET(weekBudgetKey(wk), { used:0, limit:1 }); }
+  function setWeekBudget(wk, obj){ JSET(weekBudgetKey(wk), obj||{used:0,limit:1}); }
+  function refreshFreezeUI(){
+    const now = new Date();
+    const wk = isoWeekKey(now);
+    const budget = getWeekBudget(wk);
+    const days = new Set(getFreezeDays());
+    const y = new Date(); y.setDate(now.getDate()-1);
+    const status = [
+      '今週のフリーズ使用：' + budget.used + ' / ' + budget.limit,
+      'フリーズ済み日数：' + days.size + '（直近：' + (Array.from(days).sort().slice(-1)[0] || '—') + '）'
+    ].join('　｜　');
+    const el = document.getElementById('freezeStatus'); if(el) el.textContent = status;
+    const logs = getLogs().filter(r=>r && r.solved);
+    const solved = new Set(logs.map(r => String(r.timestamp).slice(0,10)));
+    const keyY = dayKey(y), keyT = dayKey(now);
+    const by = document.getElementById('freezeYesterdayBtn');
+    const bt = document.getElementById('freezeTodayBtn');
+    if(by){ by.disabled = solved.has(keyY) || days.has(keyY) || (budget.used>=budget.limit); }
+    if(bt){ bt.disabled = solved.has(keyT) || days.has(keyT) || (budget.used>=budget.limit); }
+  }
+  function useFreeze(delta){
+    const dt = new Date(); dt.setDate(dt.getDate() + delta);
+    const key = dayKey(dt);
+    const wk = isoWeekKey(new Date());
+    const budget = getWeekBudget(wk);
+    if(budget.used >= budget.limit){ alert('今週のフリーズは使い切りました'); return; }
+    const days = new Set(getFreezeDays());
+    if(days.has(key)){ alert('その日は既にフリーズ済みです'); return; }
+    days.add(key); setFreezeDays(Array.from(days));
+    budget.used += 1; setWeekBudget(wk, budget);
+    showToast('フリーズを使いました：' + key);
+    refreshFreezeUI();
+    try{ if(window._v13_updateStreak) window._v13_updateStreak(); }catch(_){}
+  }
+
+  // Override streak computation to include freeze days
+  (function(){
+    if(typeof window._v13_updateStreak === 'function' && !window._v15_streak_patched){
+      const upd = function(){
+        try{
+          const logs = getLogs().filter(r=>r && r.solved);
+          const solvedDays = new Set(logs.map(r => String(r.timestamp).slice(0,10)));
+          const freezer = new Set(getFreezeDays());
+          const today = new Date();
+          const todayKey = dayKey(today);
+          const todayCnt = solvedDays.has(todayKey) ? (logs.filter(r=> String(r.timestamp).slice(0,10)===todayKey).length) : 0;
+          let streak = 0;
+          for(let i=0;i<3650;i++){
+            const d = new Date(today); d.setDate(today.getDate()-i);
+            const k = dayKey(d);
+            if(solvedDays.has(k) || freezer.has(k)) streak++; else break;
+          }
+          const el1=document.getElementById('streakDays'); const el2=document.getElementById('todaySolved');
+          if(el1) el1.textContent=String(streak);
+          if(el2) el2.textContent=String(todayCnt);
+        }catch(_){}
+      };
+      window._v13_updateStreak = upd;
+      window._v15_streak_patched = true;
+      setTimeout(()=>{ try{ upd(); }catch(_){} }, 200);
+    }
+  })();
+
+  // ---- Weekly Challenge (Boss Run) ----
+  function ensureChallengeModal(){
+    if(document.getElementById('challengeModal')) return;
+    const modal = document.createElement('div'); modal.className='modal challenge-modal'; modal.id='challengeModal';
+    modal.innerHTML = '<div class="window">      <header><h3>ウィークリーチャレンジ</h3><button class="ghost" id="chClose">閉じる</button></header>      <div class="body">        <div class="challenge-row">          <div class="challenge-meta" id="chMeta">—</div>          <div class="row wrap">            <label class="small">本数：</label><input type="number" id="chCount" min="3" max="30" value="10" style="width:80px;">            <label class="small">対象：この小フォルダの「出題オン」から選出</label>          </div>          <div class="challenge-score" id="chScore"></div>          <div class="row wrap">            <button class="primary" id="chStart">開始</button>            <button class="ghost" id="chStop">中断</button>            <button class="ghost" id="chCopy">結果をコピー</button>          </div>        </div>      </div>      <div class="footer"><span class="small muted">週ごとに固定のシードで選出（共有しやすい）。結果はローカル保存。</span></div>    </div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e)=>{ if(e.target===modal) modal.style.display='none'; });
+    modal.querySelector('#chClose').addEventListener('click', ()=> modal.style.display='none');
+    modal.querySelector('#chStart').addEventListener('click', startChallenge);
+    modal.querySelector('#chStop').addEventListener('click', stopChallenge);
+    modal.querySelector('#chCopy').addEventListener('click', copyChallengeResult);
+  }
+  function openChallenge(){
+    ensureChallengeModal();
+    refreshChallengeUI();
+    document.getElementById('challengeModal').style.display='flex';
+  }
+  function refreshChallengeUI(){
+    const meta = document.getElementById('chMeta'); if(!meta) return;
+    const wk = isoWeekKey(new Date());
+    meta.textContent = '今週のキー：' + wk + '｜対象フォルダ：' + currentPath();
+    const rs = getChallengeResult(wk, currentPath());
+    const box = document.getElementById('chScore');
+    box.innerHTML='';
+    if(rs){
+      const b = document.createElement('span'); b.className='badge small'; b.textContent='ベスト：' + ((rs.bestMs/1000).toFixed(2)) + 's / ミス ' + rs.mistakes;
+      box.appendChild(b);
+      const t = document.createElement('span'); t.className='small muted'; t.textContent='（' + rs.list.length + '問 ' + new Date(rs.at).toLocaleString() + '）';
+      box.appendChild(t);
+    }else{
+      const t = document.createElement('span'); t.className='small muted'; t.textContent='まだ記録がありません';
+      box.appendChild(t);
+    }
+  }
+  function buildChallengeList(count){
+    const wk = isoWeekKey(new Date());
+    const rnd = seedRnd(wk + '|' + currentPath());
+    const ids = pickEnabledCurrent().slice();
+    if(!ids.length) return [];
+    // shuffle
+    for(let i=ids.length-1;i>0;i--){ const j=Math.floor(rnd()*(i+1)); const tmp=ids[i]; ids[i]=ids[j]; ids[j]=tmp; }
+    return ids.slice(0, Math.min(count, ids.length));
+  }
+  function getChallengeResult(wk, path){
+    return JGET('ch_'+wk+'_'+(path||''), null);
+  }
+  function setChallengeResult(wk, path, obj){
+    JSET('ch_'+wk+'_'+(path||''), obj);
+  }
+  window._v15_ch = { active:false, wk:'', list:[], idx:0, start:0, totalMs:0, mistakes:0 };
+  function startChallenge(){
+    const cnt = Math.max(3, Math.min(30, parseInt(document.getElementById('chCount').value||'10',10) ));
+    const list = buildChallengeList(cnt);
+    if(!list.length){ alert('出題オンの問題が足りません'); return; }
+    const wk = isoWeekKey(new Date());
+    window._v15_ch = { active:true, wk, list, idx:0, start:Date.now(), totalMs:0, mistakes:0, results:[] };
+    document.getElementById('challengeModal').style.display='none';
+    try{ startTrainingWithKifuId(list[0]); }catch(_){ alert('開始に失敗しました'); window._v15_ch.active=false; }
+  }
+  function stopChallenge(){
+    const st = window._v15_ch || {}; st.active=false; showToast('チャレンジを中断しました');
+  }
+  function copyChallengeResult(){
+    try{
+      const wk = isoWeekKey(new Date());
+      const rs = getChallengeResult(wk, currentPath());
+      if(!rs){ alert('記録がありません'); return; }
+      const payload = { type:'reversi_trainer_weekly_v1', week:wk, path:currentPath(), result:rs };
+      const txt = JSON.stringify(payload, null, 2);
+      navigator.clipboard.writeText(txt).then(()=> showToast('結果をコピーしました'));
+    }catch(_){ alert('コピーに失敗しました'); }
+  }
+  function onCelebrateForChallenge(total, mistakes){
+    const st = window._v15_ch||{};
+    if(!st.active) return;
+    try{
+      const ms = (window._v9 && _v9.timerStart) ? Math.max(0, Date.now() - _v9.timerStart) : 0;
+      st.results.push({ len: total, mistakes: mistakes, ms: ms });
+      st.totalMs += ms; st.mistakes += mistakes;
+      st.idx++;
+      if(st.idx < st.list.length){
+        // proceed to next
+        setTimeout(()=>{ try{ document.getElementById('nextBtn')?.click(); hideCelebrate?.(); startTrainingWithKifuId(st.list[st.idx]); }catch(_){} }, 500);
+      }else{
+        st.active=false;
+        const wk = st.wk;
+        const best = getChallengeResult(wk, currentPath());
+        const now = { at: new Date().toISOString(), list: st.list.slice(), bestMs: st.totalMs, mistakes: st.mistakes };
+        if(!best || (now.bestMs < best.bestMs)){ setChallengeResult(wk, currentPath(), now); }
+        setTimeout(()=>{
+          alert('ウィークリーチャレンジ完了！\n合計時間：' + (st.totalMs/1000).toFixed(2) + '秒\n総ミス：' + st.mistakes + '\n（記録はミニウィンドウ「チャレンジ」に表示されます）');
+          try{ openChallenge(); }catch(_){}
+        }, 300);
+      }
+    }catch(_){}
+  }
+  if(typeof window.showCelebrate === 'function' && !window._v15_celebrate_hook){
+    const orig = window.showCelebrate;
+    window.showCelebrate = function(total, mistakes){
+      const out = orig(total, mistakes);
+      try{ onCelebrateForChallenge(total, mistakes); }catch(_){}
+      return out;
+    };
+    window._v15_celebrate_hook = true;
+  }
+
+})(); // end v15
+</script>
+
+
+<!-- ===== v16 Addons by ChatGPT (2025-10-19) ===== -->
+<style>
+/* v16: coach overlay & pomodoro */
+.coach-overlay{
+  position:absolute; right:10px; top:44px; z-index:7;
+  background:rgba(0,0,0,.55); color:#fff; padding:6px 8px; border-radius:8px; max-width:46ch; font-size:.9rem;
+}
+.pomo-overlay{
+  position:fixed; right:16px; bottom:16px; z-index:50;
+  background:rgba(0,0,0,.75); color:#fff; padding:10px 12px; border-radius:12px; backdrop-filter: blur(2px);
+}
+.pomo-overlay .row{ display:flex; gap:8px; align-items:center; }
+.pomo-overlay .time{ font-variant-numeric: tabular-nums; font-size:1.1rem; }
+.title-badge{ font-size:.82rem; border:1px solid #ddd; padding:2px 6px; border-radius:999px; background:#fff8e1; color:#7a5300; }
+body.theme-dark .title-badge{ background:#2b2414; border-color:#3a321a; color:#ffd54f; }
+</style>
+<script>
+(function(){
+  const K = (k)=> STORE_PREFIX + 'opt16_' + k;
+  const JGET = (k,d)=>{ try{ const v=localStorage.getItem(K(k)); return v==null?d:JSON.parse(v);}catch(_){ return d; } };
+  const JSET = (k,v)=>{ try{ localStorage.setItem(K(k), JSON.stringify(v)); }catch(_){ } };
+
+  // ---- Version bump to v16 ----
+  try{
+    document.title = 'オセロ暗記トレーナー v16（チャレンジ/フリーズ/カレンダー/コーチ/ポモドーロ/称号）';
+    const h1=document.querySelector('h1'); if(h1) h1.textContent='オセロ暗記トレーナー v16';
+  }catch(_){}
+
+  // ---- Level titles ----
+  function levelTitle(lv){
+    if(lv>=30) return '伝説';
+    if(lv>=25) return '師範';
+    if(lv>=20) return '達人';
+    if(lv>=15) return '名人';
+    if(lv>=10) return '上級';
+    if(lv>=5)  return '中級';
+    return '初級';
+  }
+  function attachTitleBadge(){
+    try{
+      const stat = document.getElementById('xpStat');
+      if(!stat || stat.querySelector('.title-badge')) return;
+      const lvEl = document.getElementById('lvNum');
+      const lv = lvEl ? parseInt(lvEl.textContent||'1',10) : 1;
+      const t = document.createElement('span'); t.className='title-badge'; t.id='titleBadge'; t.textContent=levelTitle(lv);
+      stat.querySelector('.xpwrap')?.appendChild(t);
+    }catch(_){}
+  }
+  attachTitleBadge();
+  // keep in sync after XP UI updates (v14 calls updateXpUI)
+  if(!window._v16_xp_sync && typeof window.updateXpUI === 'function'){
+    const orig = window.updateXpUI;
+    window.updateXpUI = function(){ orig(); try{ const lv=parseInt(document.getElementById('lvNum')?.textContent||'1',10); const b=document.getElementById('titleBadge'); if(b) b.textContent=levelTitle(lv); else attachTitleBadge(); }catch(_){} };
+    window._v16_xp_sync = true;
+  }
+
+  // ---- Coach persona ----
+  const COACH = {
+    "NEKKETSU": { ok:'よし！その調子！', ng:'惜しい！すぐリカバリー！', success:'ナイスクリア！', tip:['スピード×正確性で限界突破！','赤マス（誤答）を潰していこう。','ハードモードで肩慣らしだ。'] },
+    "GENTLE":   { ok:'いいですね。', ng:'大丈夫、次はできる。', success:'落ち着いて完璧でした。', tip:['少しゆっくり、丁寧に。','迷ったら定石に戻りましょう。','深呼吸してもう一巡。'] },
+    "MINIMAL":  { ok:'OK', ng:'NG', success:'✓', tip:['継続。','次へ。','集中。'] },
+    "KANSAI":   { ok:'ええやん！', ng:'おしいわ〜', success:'やったな！', tip:['赤いとこ、潰しとこか。','ええ流れやで。','焦らんといこ。'] }
+  };
+  function coachTone(){ return JGET('coach','GENTLE'); }
+  function coachSay(msg){
+    try{
+      let o=document.getElementById('coachOverlay');
+      if(!o){ o=document.createElement('div'); o.id='coachOverlay'; o.className='coach-overlay'; const wrap=document.getElementById('boardWrap'); if(wrap) wrap.appendChild(o); }
+      o.textContent = String(msg||''); o.style.display='inline-block';
+      clearTimeout(window._v16_coach_t);
+      window._v16_coach_t = setTimeout(()=>{ if(o) o.style.display='none'; }, 1400);
+    }catch(_){}
+  }
+  // settings UI injection
+  (function(){
+    const cards = document.querySelectorAll('.dockGrid .card');
+    const settings = cards && cards[0] ? cards[0] : null;
+    if(!settings || document.getElementById('coachSel')) return;
+    const field = document.createElement('div'); field.className='field row wrap';
+    const lab = document.createElement('label'); lab.textContent='コーチ：'; field.appendChild(lab);
+    const sel = document.createElement('select'); sel.id='coachSel';
+    [['NEKKETSU','熱血'],['GENTLE','やさしい'],['MINIMAL','ミニマル'],['KANSAI','関西']].forEach(([v,t])=>{
+      const o=document.createElement('option'); o.value=v; o.textContent=t; if(v===coachTone()) o.selected=true; sel.appendChild(o);
+    });
+    sel.addEventListener('change', ()=> JSET('coach', sel.value));
+    field.appendChild(sel);
+    settings.appendChild(field);
+  })();
+
+  // Patch playSound (v11 already patched); add coach messages
+  if(typeof window.playSound === 'function' && !window._v16_sound_patched){
+    const orig = window.playSound;
+    window.playSound = function(type){
+      try{
+        orig(type);
+        const tone = COACH[coachTone()]||COACH.GENTLE;
+        if(type==='ok') coachSay(tone.ok);
+        else if(type==='ng') coachSay(tone.ng);
+        else if(type==='success') coachSay(tone.success);
+      }catch(_){}
+    };
+    window._v16_sound_patched = true;
+  }
+  // Add coach tip on celebrate (replace existing simple tip in v14)
+  if(typeof window.showCelebrate === 'function' && !window._v16_tip_patched){
+    const orig = window.showCelebrate;
+    window.showCelebrate = function(total, mistakes){
+      const out = orig(total, mistakes);
+      try{
+        const tone = COACH[coachTone()]||COACH.GENTLE;
+        const tips = tone.tip||[];
+        const pick = tips[Math.floor(Math.random()*tips.length)] || '';
+        const info = document.getElementById('resultInfo');
+        if(info){
+          let row = document.getElementById('coachRow');
+          if(!row){ row = document.createElement('div'); row.className='field'; row.id='coachRow'; info.appendChild(row); }
+          row.innerHTML = '<label class="small">コーチから一言</label><div class="small muted">'+ pick +'</div>';
+        }
+      }catch(_){}
+      return out;
+    };
+    window._v16_tip_patched = true;
+  }
+
+  // ---- Pomodoro (work/break cycles) ----
+  const POMO = { on:false, work:25*60, rest:5*60, remain:0, phase:'work', id:null };
+  function ensurePomoOverlay(){
+    if(document.getElementById('pomoOverlay')) return;
+    const o = document.createElement('div'); o.id='pomoOverlay'; o.className='pomo-overlay'; o.style.display='none';
+    o.innerHTML = '<div class="row"><b>ポモドーロ</b><span id="pomoPhase" class="badge">作業</span><span id="pomoTime" class="time">25:00</span></div>      <div class="row"><button class="ghost tiny" id="pomoStart">開始</button><button class="ghost tiny" id="pomoStop">停止</button>      <label class="small">作業</label><input id="pomoWork" type="number" min="1" step="1" value="25" style="width:64px;">      <label class="small">休憩</label><input id="pomoRest" type="number" min="1" step="1" value="5" style="width:64px;"></div>';
+    document.body.appendChild(o);
+    o.querySelector('#pomoStart').addEventListener('click', ()=> startPomo());
+    o.querySelector('#pomoStop').addEventListener('click', stopPomo);
+    o.querySelector('#pomoWork').addEventListener('change', (e)=>{ POMO.work = Math.max(1, parseInt(e.target.value||'25',10))*60; if(!POMO.on) POMO.remain=POMO.work; renderPomo(); });
+    o.querySelector('#pomoRest').addEventListener('change', (e)=>{ POMO.rest = Math.max(1, parseInt(e.target.value||'5',10))*60; });
+  }
+  function showPomoOverlay(){ ensurePomoOverlay(); const o=document.getElementById('pomoOverlay'); if(o) o.style.display='block'; }
+  function hidePomoOverlay(){ const o=document.getElementById('pomoOverlay'); if(o) o.style.display='none'; }
+  function renderPomo(){
+    const t = document.getElementById('pomoTime'); const p = document.getElementById('pomoPhase');
+    if(t){ const m = Math.floor(POMO.remain/60), s = POMO.remain%60; t.textContent = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0'); }
+    if(p){ p.textContent = (POMO.phase==='work'?'作業':'休憩'); }
+  }
+  function startPomo(){
+    POMO.on = true; if(!POMO.remain){ POMO.phase='work'; POMO.remain = POMO.work; } renderPomo();
+    clearInterval(POMO.id);
+    POMO.id = setInterval(()=>{
+      POMO.remain = Math.max(0, POMO.remain - 1);
+      renderPomo();
+      if(POMO.remain<=0){
+        try{ playSound && playSound('success'); }catch(_){}
+        if(POMO.phase==='work'){ POMO.phase='rest'; POMO.remain = POMO.rest; }
+        else { POMO.phase='work'; POMO.remain = POMO.work; }
+        renderPomo();
+      }
+    }, 1000);
+  }
+  function stopPomo(){ POMO.on=false; clearInterval(POMO.id); POMO.id=null; }
+  // topbar button
+  (function(){
+    const bar=document.querySelector('.topbar');
+    if(!bar) return;
+    if(!document.getElementById('pomoBtn')){
+      const b=document.createElement('button'); b.id='pomoBtn'; b.className='ghost tiny'; b.textContent='ポモドーロ';
+      b.addEventListener('click', ()=>{ const o=document.getElementById('pomoOverlay'); if(o && o.style.display==='block'){ hidePomoOverlay(); } else { showPomoOverlay(); POMO.remain=POMO.work; renderPomo(); } });
+      bar.appendChild(b);
+    }
+  })();
+
+})(); // end v16
+</script>
+
+
+<!-- ===== v17 Addon: その他機能の表示/非表示トグル（2025-10-19） ===== -->
+<style>
+  /* 「その他機能一覧」用のラッパ。初期は非表示 */
+  .more-wrap { display: none; gap: 8px; align-items: center; flex-wrap: wrap; }
+</style>
+<script>
+(function(){
+  try{
+    const topbar = document.querySelector('.topbar');
+    if(!topbar) return;
+
+    // 作成ヘルパ
+    function makeBtn(id, text, onClick){
+      let b = document.getElementById(id);
+      if(!b){
+        b = document.createElement('button');
+        b.id = id;
+        b.className = 'ghost tiny';
+        b.textContent = text;
+        if(typeof onClick === 'function') b.addEventListener('click', onClick);
+      }
+      return b;
+    }
+
+    // 「その他機能」ラッパ
+    let moreWrap = document.getElementById('moreWrap');
+    if(!moreWrap){
+      moreWrap = document.createElement('span');
+      moreWrap.id = 'moreWrap';
+      moreWrap.className = 'more-wrap';
+      // topbar の末尾に配置（集中モードなど常時表示項目はそのまま）
+      topbar.appendChild(moreWrap);
+    }
+
+    // トグルボタン（常時表示）
+    const showBtn = makeBtn('moreShowBtn', 'その他機能一覧表示', ()=>{
+      moreWrap.style.display = 'inline-flex';
+      showBtn.style.display = 'none';
+      hideBtn.style.display = 'inline-block';
+    });
+    const hideBtn = makeBtn('moreHideBtn', '非表示', ()=>{
+      moreWrap.style.display = 'none';
+      showBtn.style.display = 'inline-block';
+      hideBtn.style.display = 'none';
+    });
+    hideBtn.style.display = 'none'; // 初期は隠す（一覧が隠れているため）
+
+    // すでに同名ボタンが topbar に存在しなければ追加
+    if(!document.getElementById('moreShowBtn')) topbar.appendChild(showBtn);
+    if(!document.getElementById('moreHideBtn')) topbar.appendChild(hideBtn);
+
+    // 折りたたみ対象のボタンID（機能数は減らさず、初期は非表示）
+    const FOLD_IDS = [
+      'openStatsBtn',     // 統計
+      'todayBtn',         // 今日のメニュー
+      'voiceBtn',         // 音声入力
+      'dupBtn',           // 重複チェック
+      'shareBtn',         // 共有（今の問題）
+      'achiBtn',          // 実績
+      'missionBtn',       // ミッション
+      'calendarBtn',      // カレンダー
+      'challengeBtn',     // チャレンジ
+      'freezeBtn',        // フリーズ
+      'pomoBtn'           // ポモドーロ
+      // ※ 「集中モード」(focusBtn) は常時表示のため含めない
+    ];
+
+    // 対象ボタンを moreWrap へ移動
+    function moveTargets(){
+      FOLD_IDS.forEach(id=>{
+        const el = document.getElementById(id);
+        if(el && el.parentNode !== moreWrap){
+          moreWrap.appendChild(el);
+        }
+      });
+    }
+
+    // 初回実行（既に生成済みのボタンを移動）
+    moveTargets();
+
+    // これから追加されるボタンにも追従（各 vXX アドオンが後から生成するため）
+    const obs = new MutationObserver((mutations)=>{
+      let need = false;
+      for(const m of mutations){
+        if(m.addedNodes && m.addedNodes.length){
+          for(const n of m.addedNodes){
+            if(n.nodeType === 1 && FOLD_IDS.includes(n.id)){ need = true; break; }
+          }
+        }
+      }
+      if(need) moveTargets();
+    });
+    obs.observe(topbar, { childList: true });
+
+    // 初期状態は非表示（ユーザーが「その他機能一覧表示」を押したときに表示）
+    moreWrap.style.display = 'none';
+  }catch(e){ console.warn('more toggle init failed:', e); }
+})();
+</script>
+<!-- ===== /v17 Addon ===== -->
+
+<!-- ===== v17 Patch by ChatGPT (全体マージ・インポート + コーチ機能の廃止) ===== -->
+<script>
+(function(){
+  // ========= disable Coach features visually and functionally =========
+  try{
+    const css = document.createElement('style');
+    css.textContent = '.coach-overlay, #coachBtn, .coach-btn, .coach-select { display:none !important; }';
+    document.head.appendChild(css);
+  }catch(e){}
+
+  // ========= helpers =========
+  const uniq = (arr)=> Array.from(new Set((arr||[]).filter(x=>x!==null && x!==undefined && x!=='')));
+  function normalizeKifu(k){
+    if(!k) k={};
+    if(!Array.isArray(k.moves)) k.moves=[];
+    // canonicalSignature is defined in base; fallback if not
+    if(!k.sig){
+      try{
+        if(typeof canonicalSignature==='function'){
+          k.sig = canonicalSignature(k.moves);
+        }else{
+          const norm = (k.moves||[]).map(t=>String(t).toUpperCase()).filter(t=>t!=='P' && t!=='PASS');
+          k.sig = norm.join(',');
+        }
+      }catch(_){}
+    }
+    if(!k.stats) k.stats={ attempts:0, solved:0, mistakes:0 };
+    if(typeof k.enabled==='undefined') k.enabled=true;
+    if(!Array.isArray(k.tags)) k.tags=[];
+    if(typeof k.comment!=='string') k.comment='';
+    if(!k.id) k.id = Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+    return k;
+  }
+  function mergeStats(a,b){
+    a=a||{}; b=b||{};
+    const out = {
+      attempts: (a.attempts||0)+(b.attempts||0),
+      solved:   (a.solved||0)+(b.solved||0),
+      mistakes: (a.mistakes||0)+(b.mistakes||0)
+    };
+    if(a.lastAt||b.lastAt) out.lastAt = Math.max(a.lastAt||0, b.lastAt||0);
+    if(a.bestMs && b.bestMs) out.bestMs = Math.min(a.bestMs, b.bestMs);
+    else out.bestMs = a.bestMs || b.bestMs;
+    return out;
+  }
+  function mergeOne(base, inc){
+    base = normalizeKifu(base); inc = normalizeKifu(inc);
+    base.tags = uniq([...(base.tags||[]), ...(inc.tags||[])]);
+    if((inc.comment||'').trim()){
+      const txt = (inc.comment||'').trim();
+      if(!(base.comment||'').includes(txt)){
+        base.comment = (base.comment?base.comment+'\n':'' ) + '【追記（マージ）】' + txt;
+      }
+    }
+    // enabled: true が1つでもあれば true
+    base.enabled = (base.enabled!==false) || (inc.enabled!==false);
+    // 手動クリア: OR
+    base.manualCleared = !!(base.manualCleared || inc.manualCleared);
+    // nameは既存優先、なければ取り込み
+    base.name = base.name || inc.name || '';
+    // 統計は加算
+    base.stats = mergeStats(base.stats, inc.stats);
+    // SRS は保守的（早い期限・長い連続・平均イーズ）
+    if(inc.srsDue!=null || inc.srsInterval!=null || inc.srsEase!=null || inc.srsStreak!=null){
+      base.srsDue = Math.min(base.srsDue||Infinity, inc.srsDue||Infinity);
+      if(!isFinite(base.srsDue)) delete base.srsDue;
+      base.srsInterval = Math.max(base.srsInterval||0, inc.srsInterval||0) || undefined;
+      const aE = (base.srsEase==null?null:base.srsEase), bE = (inc.srsEase==null?null:inc.srsEase);
+      base.srsEase = (aE!=null && bE!=null) ? ((aE + bE)/2) : (aE!=null? aE : bE);
+      base.srsStreak = Math.max(base.srsStreak||0, inc.srsStreak||0) || undefined;
+    }
+    return base;
+  }
+  function ensurePath(st, big, sm){
+    if(!(st.bigFolders||[]).some(b => b.name===big)){ (st.bigFolders|| (st.bigFolders=[])).push({name:big, defaultColor:""}); }
+    if(!st.smallByBig[big]) st.smallByBig[big] = [];
+    if(sm && !st.smallByBig[big].includes(sm)) st.smallByBig[big].push(sm);
+    const pk = big + '/' + (sm||'__ROOT__');
+    if(!st.kifuByPath[pk]) st.kifuByPath[pk]=[];
+    if(!st.queueByPath[pk]) st.queueByPath[pk]=[];
+    return pk;
+  }
+  function mergeStore(base, incoming){
+    if(!incoming || typeof incoming!=='object') throw new Error('不正なJSONです');
+    const isStore = incoming && incoming.kifuByPath && incoming.bigFolders;
+    const isFolderExport = incoming && incoming.type==='reversi_trainer_folder_export_v1';
+    if(!isStore && !isFolderExport) throw new Error('対応形式は「フルストアJSON」または「フォルダエクスポートJSON」です');
+
+    if(isStore){
+      // bigFolders のメタをマージ（defaultColor は既存優先）
+      (incoming.bigFolders||[]).forEach(b=>{
+        const name = b.name;
+        const meta = (base.bigFolders||[]).find(x=>x.name===name);
+        if(!meta){ base.bigFolders.push({ name, defaultColor: b.defaultColor||"" }); }
+        else if(!meta.defaultColor && b.defaultColor){ meta.defaultColor = b.defaultColor; }
+      });
+      // small をユニオン
+      Object.keys(incoming.smallByBig||{}).forEach(big=>{
+        base.smallByBig[big] = uniq([...(base.smallByBig[big]||[]), ...(incoming.smallByBig[big]||[])]);
+      });
+      // 棋譜マージ（sigで重複判定）
+      Object.keys(incoming.kifuByPath||{}).forEach(pk=>{
+        const [big, smPart] = pk.split('/');
+        const sm = (smPart==='__ROOT__'? null : smPart);
+        const pk2 = ensurePath(base, big, sm);
+        const mine = base.kifuByPath[pk2] || (base.kifuByPath[pk2]=[]);
+        const map = new Map();
+        mine.forEach(k=>{ const kk=normalizeKifu(k); map.set(kk.sig, kk); });
+        (incoming.kifuByPath[pk]||[]).forEach(k=>{
+          const inc = normalizeKifu(k);
+          const hit = map.get(inc.sig);
+          if(hit){ mergeOne(hit, inc); }
+          else{
+            mine.push(normalizeKifu(inc));
+            map.set(inc.sig, mine[mine.length-1]);
+          }
+        });
+      });
+      // queue はIDベースでユニオン（新規IDに対しては効果限定的）
+      Object.keys(incoming.queueByPath||{}).forEach(pk=>{
+        const [big, smPart] = pk.split('/');
+        const sm = (smPart==='__ROOT__'? null : smPart);
+        const pk2 = ensurePath(base, big, sm);
+        base.queueByPath[pk2] = uniq([...(base.queueByPath[pk2]||[]), ...(incoming.queueByPath[pk]||[])]);
+      });
+    }else if(isFolderExport){
+      const p = incoming.path || 'Imported/__ROOT__';
+      const [big, smPart] = p.split('/');
+      const sm = (smPart && smPart!=='__ROOT__') ? smPart : null;
+      const pk2 = ensurePath(base, big, sm);
+      const mine = base.kifuByPath[pk2] || (base.kifuByPath[pk2]=[]);
+      const map = new Map(); mine.forEach(k=>{ const kk=normalizeKifu(k); map.set(kk.sig, kk); });
+      (incoming.items||[]).forEach(it=>{
+        const inc = normalizeKifu(Array.isArray(it) ? { moves: it } : it);
+        const hit = map.get(inc.sig);
+        if(hit){ mergeOne(hit, inc); } else { mine.push(inc); map.set(inc.sig, inc); }
+      });
+    }
+
+    // 「覚えた棋譜（ユニーク）」は sig で集合化
+    try{
+      const sigSet = new Set();
+      Object.values(base.kifuByPath||{}).forEach(list=>{
+        (list||[]).forEach(k=>{ if((typeof isCleared==='function'? isCleared(k) : !!(k.stats && k.stats.solved>0))) if(k.sig) sigSet.add(k.sig); });
+      });
+      base.learnedOnceSigs = Array.from(sigSet);
+    }catch(_){}
+    return base;
+  }
+
+  // ========= UI: 全体マージ・インポート =========
+  (function installMergeImport(){
+    const importBtn = document.getElementById('importBtn');
+    if(!importBtn) return;
+    if(document.getElementById('mergeImportBtn')) return;
+    const btn = document.createElement('button'); btn.className='ghost'; btn.id='mergeImportBtn'; btn.textContent='全体マージ・インポート';
+    const file = document.createElement('input'); file.type='file'; file.id='mergeImportFile'; file.accept='application/json'; file.style.display='none';
+    importBtn.insertAdjacentElement('afterend', btn);
+    btn.insertAdjacentElement('afterend', file);
+
+    btn.addEventListener('click', ()=> file.click());
+    file.addEventListener('change', (e)=>{
+      const f = e.target.files && e.target.files[0]; if(!f) return;
+      const reader = new FileReader();
+      reader.onload = ()=>{
+        try{
+          const obj = JSON.parse(String(reader.result||'{}'));
+          const base = (typeof store!=='undefined' && store) ? store : (window.loadStore? loadStore() : null);
+          if(!base) { alert('内部ストアが見つかりません'); return; }
+          const merged = mergeStore(base, obj);
+          saveStore(merged);
+          window.store = merged;
+          if(typeof refreshBigSelect==='function') refreshBigSelect();
+          if(typeof updateCountsAndPath==='function') updateCountsAndPath();
+          if(typeof renderKifuList==='function') try{ renderKifuList(); }catch(_){}
+          if(typeof showToast==='function') showToast('マージ・インポートが完了しました（重複は統合）');
+          else alert('マージ・インポートが完了しました（重複は統合）');
+        }catch(err){
+          console.error(err);
+          alert('マージに失敗：' + (err && err.message ? err.message : String(err)));
+        }finally{
+          try{ e.target.value=''; }catch(_){}
+        }
+      };
+      reader.readAsText(f, 'utf-8');
+    });
+  })();
+
+  // ========= override: 「覚えた棋譜（ユニーク）」は sig で数える =========
+  ;(function overrideUniqueCounter(){
+    function updateUnique(){
+      try{
+        const set = new Set();
+        Object.values(store.kifuByPath||{}).forEach(list=>{
+          (list||[]).forEach(k=>{ if(isCleared(k) && k.sig) set.add(k.sig); });
+        });
+        const el = document.getElementById('uniqueSolved'); if(el) el.textContent = String(set.size);
+      }catch(_){}
+    }
+    if(typeof window.updateCountsAndPath==='function'){
+      const orig = window.updateCountsAndPath;
+      window.updateCountsAndPath = function(){ orig(); updateUnique(); };
+    }else{
+      updateUnique();
+    }
+    setTimeout(updateUnique, 300);
+  })();
+
+  // ========= hard-disable any coach openers =========
+  window.openCoach = function(){ alert('コーチ機能は廃止されました。'); };
+  window.showCoachMessage = function(){};
+
+  // ========= bump title =========
+  try{
+    document.title = (document.title||'').replace(/v(\d+)/, 'v17') || 'オセロ暗記トレーナー v17';
+    const h1 = document.querySelector('h1'); if(h1) h1.textContent = 'オセロ暗記トレーナー v17';
+  }catch(_){}
+})();
+</script>
+
+
+<style>
+/* === Coach feature removed (UI hidden) === */
+#coachSel, #coachRow, #coachOverlay { display: none !important; }
+</style>
+
+<script>
+// === Coach feature removed (hard disable & UI cleanup) ===
+(function(){
+  function removeCoachUI(){
+    try {
+      var sel = document.getElementById('coachSel');
+      if (sel) {
+        var field = sel.closest ? sel.closest('.field') : null;
+        if (field && field.parentNode) field.parentNode.removeChild(field);
+        else sel.parentNode && sel.parentNode.removeChild(sel);
+      }
+      var row = document.getElementById('coachRow');
+      if (row && row.parentNode) row.parentNode.removeChild(row);
+      var ov = document.getElementById('coachOverlay');
+      if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+      // Remove any label showing 'コーチ：'
+      var labels = Array.prototype.slice.call(document.querySelectorAll('label'));
+      labels.forEach(function(lb){
+        if (/^\s*コーチ\s*：?\s*$/.test(lb.textContent || '')) {
+          var wrap = lb.closest ? lb.closest('.field') : null;
+          if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
+          else lb.parentNode && lb.parentNode.removeChild(lb);
+        }
+      });
+    } catch (_) {}
+  }
+  function disableCoach(){
+    try {
+      // Override any coach functions if they exist
+      if (typeof window.coachSay === 'function') window.coachSay = function(){};
+      if (typeof window.coachTone === 'function') window.coachTone = function(){ return 'GENTLE'; };
+    } catch(_) {}
+  }
+  function run(){
+    disableCoach();
+    removeCoachUI();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', run);
+  } else {
+    run();
+  }
+  // Sweep a few times in case UI is injected late
+  var n = 0;
+  var t = setInterval(function(){
+    removeCoachUI();
+    if (++n >= 8) clearInterval(t);
+  }, 400);
+})();
+</script>
+
+<style>
+/* ===== Mobile ← / → controls & touch polish (2025-10-20) ===== */
+@media (pointer: coarse) {
+  #touchArrows {
+    position: absolute;
+    left: 8px; right: 8px; bottom: 8px;
+    z-index: 12;
+    display: none;
+    justify-content: space-between;
+    gap: 8px;
+    pointer-events: none;
+  }
+  #touchArrows .btn {
+    pointer-events: auto;
+    background: rgba(0,0,0,0.55);
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    padding: 12px 16px;
+    font-size: 18px;
+    line-height: 1;
+    min-width: 64px;
+    touch-action: manipulation;
+  }
+}
+/* make tap responsiveness snappier on mobile */
+button, .cell { touch-action: manipulation; }
+</style>
+<script>
+// ===== Mobile ← / → controls & swipe-to-scan (2025-10-20) =====
+(function(){
+  try{
+    var wrap = document.getElementById('boardWrap');
+    if(!wrap) return;
+
+    // Create overlay container & buttons
+    if(!document.getElementById('touchArrows')){
+      var container = document.createElement('div');
+      container.id = 'touchArrows';
+      container.setAttribute('aria-label', '確認モードの移動');
+      var left = document.createElement('button'); left.className='btn'; left.type='button'; left.textContent='◀';
+      var right = document.createElement('button'); right.className='btn'; right.type='button'; right.textContent='▶';
+      container.appendChild(left); container.appendChild(right);
+      // Place inside boardWrap (so it rotates with white-view, etc.)
+      wrap.appendChild(container);
+    }
+    var container = document.getElementById('touchArrows');
+    var left = container.querySelector('.btn:first-child');
+    var right = container.querySelector('.btn:last-child');
+
+    function step(delta){
+      try{
+        if(!window.training) return;
+        if(!window.inspectMode && typeof window.enterInspect === 'function'){ window.enterInspect(); }
+        var min = (window.rangeStart||1)-1;
+        var max = (window.rangeEnd || (window.expectedMoves ? window.expectedMoves.length : 0));
+        if(typeof window.inspectIndex !== 'number') window.inspectIndex = window.moveIndex || 0;
+        window.inspectIndex = Math.max(min, Math.min(max, window.inspectIndex + delta));
+        if(typeof window.setPositionByTokenIndex === 'function') window.setPositionByTokenIndex(window.inspectIndex);
+        if(typeof window.renderBoard === 'function') window.renderBoard();
+        if(typeof window.setStatus === 'function'){
+          var total = window.rangeEnd || (window.expectedMoves ? window.expectedMoves.length : 0);
+          window.setStatus('確認中：' + (window.inspectIndex+1) + '手目の局面（範囲 ' + (window.rangeStart||1) + '〜' + total + '）');
+        }
+      }catch(_){}
+    }
+
+    var holdTimer=null, repTimer=null;
+    function startHold(delta){
+      step(delta);
+      try{ clearTimeout(holdTimer); }catch(_){}
+      try{ clearInterval(repTimer); }catch(_){}
+      holdTimer = setTimeout(function(){ repTimer = setInterval(function(){ step(delta); }, 130); }, 420);
+    }
+    function stopHold(){
+      try{ clearTimeout(holdTimer); }catch(_){}
+      try{ clearInterval(repTimer); }catch(_){}
+      holdTimer=null; repTimer=null;
+    }
+
+    ['pointerdown','touchstart','mousedown'].forEach(function(ev){
+      left.addEventListener(ev, function(e){ e.preventDefault(); e.stopPropagation(); startHold(-1); }, {passive:false});
+      right.addEventListener(ev, function(e){ e.preventDefault(); e.stopPropagation(); startHold(+1); }, {passive:false});
+    });
+    ['pointerup','pointercancel','touchend','touchcancel','mouseup','mouseleave'].forEach(function(ev){
+      left.addEventListener(ev, stopHold, {passive:true});
+      right.addEventListener(ev, stopHold, {passive:true});
+    });
+
+    // Swipe on board to move left/right (one-finger, quick horizontal gesture)
+    var sx=0, sy=0, st=0;
+    wrap.addEventListener('touchstart', function(e){
+      if(!window.training) return;
+      if(!e.touches || e.touches.length!==1) return;
+      sx = e.touches[0].clientX; sy = e.touches[0].clientY; st = Date.now();
+    }, {passive:true});
+    wrap.addEventListener('touchend', function(e){
+      if(!window.training) return;
+      if(!e.changedTouches || !e.changedTouches.length) return;
+      var dx = e.changedTouches[0].clientX - sx;
+      var dy = e.changedTouches[0].clientY - sy;
+      var dt = Date.now() - st;
+      if(Math.abs(dx) > 50 && Math.abs(dy) < 40 && dt < 600){
+        if(dx < 0) step(+1); else step(-1);
+      }
+    }, {passive:true});
+
+    function updateVisibility(){
+      // show only while training; hide on celebrate/modal etc. renderBoard will call this.
+      container.style.display = (window.training ? 'flex' : 'none');
+    }
+
+    // Patch renderBoard to update visibility
+    var origRender = window.renderBoard;
+    if(typeof origRender === 'function'){
+      window.renderBoard = function(){ origRender(); updateVisibility(); };
+    }else{
+      updateVisibility();
+    }
+
+    // Hide when celebrate is shown
+    var cel = document.getElementById('celebrate');
+    if(cel){
+      var obs = new MutationObserver(function(){ updateVisibility(); });
+      obs.observe(cel, { attributes:true, attributeFilter:['style','class'] });
+    }
+  }catch(_){}
+})();
+</script>
+
+</body></html>
