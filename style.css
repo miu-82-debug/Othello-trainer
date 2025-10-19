@@ -1,0 +1,120 @@
+* { box-sizing: border-box; }
+:root {
+  --bg: #111;
+  --fg: #f4f4f4;
+  --muted: #a5a5a5;
+  --brand: #2ecc71;
+  --panel: #1c1c1c;
+  --accent: #3d9df6;
+}
+html, body { height: 100%; }
+body {
+  margin: 0;
+  color: var(--fg);
+  background: radial-gradient(1200px 800px at 10% 0%, #151515 0, #0c0c0c 60%);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans CJK JP', Meiryo, sans-serif;
+}
+.app-header, .app-footer {
+  background: #0f0f0f;
+  padding: 12px 16px;
+  border-bottom: 1px solid #202020;
+}
+.app-header { display: flex; align-items: center; gap: 12px; }
+.app-header h1 { margin: 0; font-size: 18px; font-weight: 700; }
+#installBtn {
+  margin-left: auto;
+  padding: 6px 10px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.layout { display: grid; grid-template-columns: 320px 1fr; gap: 14px; padding: 14px; }
+.sidebar {
+  background: var(--panel);
+  border: 1px solid #202020;
+  border-radius: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+  height: calc(100vh - 110px);
+  overflow: auto;
+}
+.tree h3 { margin: 6px 0; font-size: 13px; color: var(--muted); }
+.tree ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.tree li { padding: 8px 10px; background: #141414; border: 1px solid #222; border-radius: 8px; cursor: pointer; }
+.tree li:hover { border-color: var(--accent); }
+.tree li.active { outline: 2px solid var(--accent); }
+.loader details summary { cursor: pointer; padding: 6px 8px; background: #141414; border: 1px solid #222; border-radius: 8px; }
+.load-controls { padding: 8px; display: grid; gap: 8px; font-size: 14px; }
+.file-btn { display: inline-grid; padding: 8px 10px; background: #141414; border: 1px dashed #333; border-radius: 8px; cursor: pointer; width: max-content; }
+.file-btn input { display: none; }
+.or { font-size: 12px; color: var(--muted); }
+.hint { color: var(--muted); margin: 0; font-size: 12px; }
+
+.filters input[type="search"] {
+  width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid #333;
+  background: #121212; color: var(--fg);
+}
+
+.content { display: grid; gap: 12px; }
+.board-panel {
+  background: var(--panel);
+  border: 1px solid #202020;
+  border-radius: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+.board-wrap { display: grid; place-items: center; }
+.board {
+  display: grid;
+  grid-template-columns: repeat(8, 42px);
+  grid-template-rows: repeat(8, 42px);
+  gap: 2px;
+  background: #0c5e22;
+  padding: 6px;
+  border-radius: 10px;
+  border: 2px solid #083d16;
+}
+.cell {
+  width: 42px; height: 42px; background: #0c5e22; border-radius: 6px;
+  position: relative; outline: 1px solid rgba(0,0,0,0.25);
+}
+.disc {
+  position: absolute; inset: 4px; border-radius: 50%;
+  box-shadow: inset 0 0 12px rgba(0,0,0,.45), 0 1px 1px rgba(0,0,0,.5);
+}
+.disc.black { background: radial-gradient(circle at 30% 30%, #444 0, #111 60%, #000 100%); }
+.disc.white { background: radial-gradient(circle at 30% 30%, #fff 0, #dedede 60%, #bdbdbd 100%); }
+.coord {
+  position: absolute; bottom: 2px; right: 4px;
+  font-size: 9px; color: rgba(255,255,255,.35);
+}
+.controls { display: flex; align-items: center; gap: 6px; }
+.controls button {
+  padding: 6px 8px; background: #141414; border: 1px solid #333;
+  border-radius: 6px; color: var(--fg); cursor: pointer;
+}
+.controls button:disabled { opacity: .5; cursor: not-allowed; }
+#moveInfo { min-width: 80px; text-align: center; color: var(--muted); }
+
+.meta {
+  background: var(--panel);
+  border: 1px solid #202020;
+  border-radius: 10px;
+  padding: 12px;
+}
+.meta h2 { margin-top: 0; }
+.meta .kv { display: grid; grid-template-columns: 120px 1fr; gap: 4px 10px; font-size: 14px; }
+.meta .kv div.k { color: var(--muted); }
+
+.app-footer { border-top: 1px solid #202020; }
+
+@media (max-width: 980px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { height: auto; }
+  .board { grid-template-columns: repeat(8, 36px); grid-template-rows: repeat(8, 36px); }
+  .cell { width: 36px; height: 36px; }
+}
