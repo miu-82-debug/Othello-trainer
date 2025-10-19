@@ -1996,7 +1996,7 @@ if (typeof searchInput !== 'undefined' && searchInput) {
   // PWA: service worker 登録
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./service-worker.js').catch(console.warn);
+      navigator.serviceWorker.register('./sw-v2.js').catch(console.warn);
     });
   }
 </script>
