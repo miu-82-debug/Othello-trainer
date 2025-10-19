@@ -1,0 +1,2 @@
+# Othello-trainer
+Othello-trainer
